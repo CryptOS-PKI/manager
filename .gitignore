@@ -1,0 +1,27 @@
+# IDE
+.idea/
+.vscode/
+
+# Go
+*.exe
+*.test
+*.out
+vendor/
+bin/
+
+# Node / web
+node_modules/
+dist/
+build/
+.next/
+.turbo/
+.cache/
+coverage/
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# OS
+.DS_Store

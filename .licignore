@@ -1,0 +1,5 @@
+# Deny everything by default, then allow hand-written Go source.
+*
+!*.go
+!*/
+vendor/

@@ -1,0 +1,3 @@
+golic:
+  # Use the master config's built-in .go rule (idiomatic Go block comment).
+  rules: {}

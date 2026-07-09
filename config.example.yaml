@@ -1,0 +1,26 @@
+# CryptOS Fleet Manager — example configuration.
+#
+# Node inventory for the local two-node FM-live QEMU fleet (nodeID / TPM-less).
+# Both FQDNs are mapped to 127.0.0.1 in /etc/hosts; the QEMU host-forwards land
+# on each node's guest :443. The manager dials each node's mTLS gRPC listener
+# presenting that node's admin client cert+key. The node server cert is an
+# ephemeral self-signed cert, so the manager relaxes server verification and
+# relies on client-auth (which the node enforces). caCertPath is that node's
+# identity chain (`cryptosctl identity show -o pem`): root = 1 cert, the
+# intermediate = 2 certs [intermediate, root].
+listen: "127.0.0.1:8080"
+corsOrigins: ["http://localhost:5173"]
+authBypass: true
+nodes:
+  - name: pki-root
+    endpoint: "pki-root.acme.com:4443"
+    role: root
+    adminCertPath: "/code/sfroebel/fm-live/root/admin.crt"
+    adminKeyPath: "/code/sfroebel/fm-live/root/admin.key"
+    caCertPath: "/code/sfroebel/fm-live/root/ca.pem"
+  - name: pki-inter
+    endpoint: "pki-inter.acme.com:4444"
+    role: intermediate
+    adminCertPath: "/code/sfroebel/fm-live/inter/admin.crt"
+    adminKeyPath: "/code/sfroebel/fm-live/inter/admin.key"
+    caCertPath: "/code/sfroebel/fm-live/inter/ca.pem"

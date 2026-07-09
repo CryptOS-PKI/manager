@@ -1,0 +1,101 @@
+// Package config loads the manager's static node inventory and server
+// settings from a YAML file.
+package config
+
+/*
+Apache License 2.0
+
+Copyright 2026 Shane
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import (
+	"fmt"
+	"os"
+
+	"gopkg.in/yaml.v3"
+)
+
+// Config is the manager's top-level configuration: the address it listens
+// on, the CORS origins it allows, whether to bypass auth (dev-only), and
+// the static fleet inventory it dials out to.
+type Config struct {
+	Listen      string    `yaml:"listen"`
+	CORSOrigins []string  `yaml:"corsOrigins"`
+	AuthBypass  bool      `yaml:"authBypass"`
+	Nodes       []NodeCfg `yaml:"nodes"`
+}
+
+// NodeCfg describes one fleet node: where to dial it, its role, and the
+// file paths for the admin mTLS client cert/key and the CA used to pin the
+// node's identity.
+type NodeCfg struct {
+	Name          string `yaml:"name"`
+	Endpoint      string `yaml:"endpoint"`
+	Role          string `yaml:"role"`
+	AdminCertPath string `yaml:"adminCertPath"`
+	AdminKeyPath  string `yaml:"adminKeyPath"`
+	CACertPath    string `yaml:"caCertPath"`
+}
+
+// Load reads the YAML file at path and returns the parsed Config, or an
+// error if the file cannot be read, the YAML is malformed, or validation
+// fails.
+func Load(path string) (Config, error) {
+	var cfg Config
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("config: read %s: %w", path, err)
+	}
+
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("config: parse %s: %w", path, err)
+	}
+
+	if err := cfg.validate(); err != nil {
+		return Config{}, fmt.Errorf("config: %s: %w", path, err)
+	}
+
+	return cfg, nil
+}
+
+func (c Config) validate() error {
+	if c.Listen == "" {
+		return fmt.Errorf("listen must not be empty")
+	}
+
+	for i, n := range c.Nodes {
+		if n.Name == "" {
+			return fmt.Errorf("nodes[%d]: name must not be empty", i)
+		}
+		if n.Endpoint == "" {
+			return fmt.Errorf("nodes[%d] (%s): endpoint must not be empty", i, n.Name)
+		}
+		if n.Role == "" {
+			return fmt.Errorf("nodes[%d] (%s): role must not be empty", i, n.Name)
+		}
+		if n.AdminCertPath == "" {
+			return fmt.Errorf("nodes[%d] (%s): adminCertPath must not be empty", i, n.Name)
+		}
+		if n.AdminKeyPath == "" {
+			return fmt.Errorf("nodes[%d] (%s): adminKeyPath must not be empty", i, n.Name)
+		}
+		if n.CACertPath == "" {
+			return fmt.Errorf("nodes[%d] (%s): caCertPath must not be empty", i, n.Name)
+		}
+	}
+
+	return nil
+}

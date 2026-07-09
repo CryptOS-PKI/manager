@@ -78,3 +78,61 @@ func TestStore_Node_NotFound(t *testing.T) {
 func TestStore_ImplementsInterface(t *testing.T) {
 	var _ store.Store = New(testNodes())
 }
+
+func testCatalog() ([]store.Profile, []store.Adapter, []store.AuditEvent, []store.Enrollment) {
+	profiles := []store.Profile{
+		{Name: "TLS Server (LDAPS)", KeyAlg: "ECDSA-P384", ValidityDays: 365},
+	}
+	adapters := []store.Adapter{
+		{Kind: "acme", Name: "ACME (RFC 8555)", Enabled: true},
+	}
+	audit := []store.AuditEvent{
+		{ID: "aud-0000", Kind: "issued", Summary: "Issued leaf svc-1.acme.example"},
+	}
+	enrollments := []store.Enrollment{
+		{ID: "enr-0001", ProposedName: "acme-issuing-04", Status: "PENDING"},
+	}
+
+	return profiles, adapters, audit, enrollments
+}
+
+func TestStore_New_HasEmptyCatalog(t *testing.T) {
+	s := New(testNodes())
+
+	if got := s.Profiles(); len(got) != 0 {
+		t.Errorf("Profiles() len = %d, want 0", len(got))
+	}
+	if got := s.Adapters(); len(got) != 0 {
+		t.Errorf("Adapters() len = %d, want 0", len(got))
+	}
+	if got := s.Audit(); len(got) != 0 {
+		t.Errorf("Audit() len = %d, want 0", len(got))
+	}
+	if got := s.Enrollments(); len(got) != 0 {
+		t.Errorf("Enrollments() len = %d, want 0", len(got))
+	}
+}
+
+func TestStore_NewWithCatalog_RoundTrip(t *testing.T) {
+	profiles, adapters, audit, enrollments := testCatalog()
+
+	s := NewWithCatalog(testNodes(), profiles, adapters, audit, enrollments)
+
+	if got := s.Profiles(); len(got) != 1 || got[0].Name != "TLS Server (LDAPS)" {
+		t.Errorf("Profiles() = %+v, want the seeded profile", got)
+	}
+	if got := s.Adapters(); len(got) != 1 || got[0].Kind != "acme" {
+		t.Errorf("Adapters() = %+v, want the seeded adapter", got)
+	}
+	if got := s.Audit(); len(got) != 1 || got[0].ID != "aud-0000" {
+		t.Errorf("Audit() = %+v, want the seeded event", got)
+	}
+	if got := s.Enrollments(); len(got) != 1 || got[0].Status != "PENDING" {
+		t.Errorf("Enrollments() = %+v, want the seeded enrollment", got)
+	}
+
+	// Nodes() is unaffected by the catalog constructor.
+	if got := s.Nodes(); len(got) != 2 {
+		t.Errorf("Nodes() len = %d, want 2", len(got))
+	}
+}

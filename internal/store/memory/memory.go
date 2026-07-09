@@ -27,20 +27,38 @@ import (
 )
 
 // Store is an in-memory, concurrency-safe store.Store backed by a fixed
-// snapshot of nodes supplied at construction.
+// snapshot of nodes and catalog data supplied at construction.
 type Store struct {
-	mu    sync.RWMutex
-	nodes map[string]store.Node
+	mu          sync.RWMutex
+	nodes       map[string]store.Node
+	profiles    []store.Profile
+	adapters    []store.Adapter
+	audit       []store.AuditEvent
+	enrollments []store.Enrollment
 }
 
-// New builds a Store from the given nodes, keyed by Node.Name.
+// New builds a Store from the given nodes, keyed by Node.Name, with an
+// empty catalog. Use NewWithCatalog to also seed profiles/adapters/audit/
+// enrollments.
 func New(nodes []store.Node) *Store {
+	return NewWithCatalog(nodes, nil, nil, nil, nil)
+}
+
+// NewWithCatalog builds a Store from the given nodes, keyed by Node.Name,
+// and the given catalog data.
+func NewWithCatalog(nodes []store.Node, profiles []store.Profile, adapters []store.Adapter, audit []store.AuditEvent, enrollments []store.Enrollment) *Store {
 	m := make(map[string]store.Node, len(nodes))
 	for _, n := range nodes {
 		m[n.Name] = n
 	}
 
-	return &Store{nodes: m}
+	return &Store{
+		nodes:       m,
+		profiles:    profiles,
+		adapters:    adapters,
+		audit:       audit,
+		enrollments: enrollments,
+	}
 }
 
 // Nodes returns every node in the store.
@@ -64,4 +82,48 @@ func (s *Store) Node(name string) (store.Node, bool) {
 	n, ok := s.nodes[name]
 
 	return n, ok
+}
+
+// Profiles returns every certificate issuance profile.
+func (s *Store) Profiles() []store.Profile {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]store.Profile, len(s.profiles))
+	copy(out, s.profiles)
+
+	return out
+}
+
+// Adapters returns every enrollment protocol adapter.
+func (s *Store) Adapters() []store.Adapter {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]store.Adapter, len(s.adapters))
+	copy(out, s.adapters)
+
+	return out
+}
+
+// Audit returns every audit event.
+func (s *Store) Audit() []store.AuditEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]store.AuditEvent, len(s.audit))
+	copy(out, s.audit)
+
+	return out
+}
+
+// Enrollments returns every enrollment request.
+func (s *Store) Enrollments() []store.Enrollment {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]store.Enrollment, len(s.enrollments))
+	copy(out, s.enrollments)
+
+	return out
 }

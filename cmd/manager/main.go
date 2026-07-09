@@ -34,6 +34,7 @@ import (
 	"github.com/CryptOS-PKI/manager/internal/nodeclient"
 	"github.com/CryptOS-PKI/manager/internal/store"
 	"github.com/CryptOS-PKI/manager/internal/store/memory"
+	"github.com/CryptOS-PKI/manager/internal/store/seed"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -58,7 +59,8 @@ func main() {
 			CACert:    n.CACertPath,
 		}
 	}
-	st := memory.New(nodes)
+	profiles, adapters, audit, enrollments := seed.Catalog()
+	st := memory.NewWithCatalog(nodes, profiles, adapters, audit, enrollments)
 
 	dial := func(n store.Node) (fleet.NodeConn, error) {
 		c, err := nodeclient.Dial(n)
@@ -78,7 +80,8 @@ func main() {
 
 	corsHandler := withCORS(cfg.CORSOrigins, mux)
 
-	log.Printf("manager: listening on %s (h2c), %d node(s) configured", cfg.Listen, len(nodes))
+	log.Printf("manager: listening on %s (h2c), %d node(s) configured, catalog seeded (%d profiles, %d adapters, %d audit events, %d enrollments)",
+		cfg.Listen, len(nodes), len(profiles), len(adapters), len(audit), len(enrollments))
 
 	server := &http.Server{
 		Addr:    cfg.Listen,

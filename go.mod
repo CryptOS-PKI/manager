@@ -7,6 +7,8 @@ require (
 	gopkg.in/yaml.v3 v3.0.1
 )
 
+require connectrpc.com/connect v1.20.0
+
 require (
 	github.com/CryptOS-PKI/api v0.0.0-20260706155657-ec67df1c59d0
 	golang.org/x/net v0.51.0 // indirect

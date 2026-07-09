@@ -1,0 +1,55 @@
+// Package fleet implements the manager's cryptos.fleet.v1.FleetService
+// Connect handler: it fans out to each fleet node over nodeclient and
+// reports per-node health without failing the whole request when one node
+// is unreachable.
+package fleet
+
+/*
+Apache License 2.0
+
+Copyright 2026 Shane
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import (
+	"context"
+
+	fleetv1connect "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1/fleetv1connect"
+	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/store"
+)
+
+// NodeConn is the manager's-eye view of a per-node connection: just enough
+// to serve FleetService. nodeclient.Client satisfies it; tests inject a
+// fake instead of dialing a real node.
+type NodeConn interface {
+	GetStatus(ctx context.Context) (*cryptosv1.GetStatusResponse, error)
+	GetIdentity(ctx context.Context) (*cryptosv1.GetIdentityResponse, error)
+	Close() error
+}
+
+// Service implements fleetv1connect.FleetServiceHandler over a fleet
+// inventory Store, dialing each node on demand via dial.
+type Service struct {
+	store store.Store
+	dial  func(store.Node) (NodeConn, error)
+}
+
+// New builds a Service backed by st, dialing nodes with dial. Callers in
+// production pass an adapter over nodeclient.Dial; tests pass a fake.
+func New(st store.Store, dial func(store.Node) (NodeConn, error)) *Service {
+	return &Service{store: st, dial: dial}
+}
+
+var _ fleetv1connect.FleetServiceHandler = (*Service)(nil)

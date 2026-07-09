@@ -1,0 +1,207 @@
+package fleet
+
+/*
+Apache License 2.0
+
+Copyright 2026 Shane
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	connect "connectrpc.com/connect"
+	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
+	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/store"
+	"github.com/CryptOS-PKI/manager/internal/store/memory"
+)
+
+// fakeConn is a canned NodeConn used to drive Service without a real dial.
+type fakeConn struct {
+	status   *cryptosv1.GetStatusResponse
+	identity *cryptosv1.GetIdentityResponse
+	err      error
+	closed   bool
+}
+
+func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.status, nil
+}
+
+func (f *fakeConn) GetIdentity(context.Context) (*cryptosv1.GetIdentityResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.identity, nil
+}
+
+func (f *fakeConn) Close() error {
+	f.closed = true
+	return nil
+}
+
+func testStore() store.Store {
+	return memory.New([]store.Node{
+		{
+			Name:     "A",
+			Endpoint: "a.acme.com:4443",
+			Role:     "root",
+		},
+		{
+			Name:     "B",
+			Endpoint: "b.acme.com:4444",
+			Role:     "intermediate",
+		},
+	})
+}
+
+// dialFor returns a dial func that hands back conns keyed by node name, and
+// records which conns it produced so a test can assert Close() was called.
+func dialFor(conns map[string]*fakeConn) func(store.Node) (NodeConn, error) {
+	return func(n store.Node) (NodeConn, error) {
+		c, ok := conns[n.Name]
+		if !ok {
+			return nil, errors.New("dialFor: no fake conn for " + n.Name)
+		}
+		return c, nil
+	}
+}
+
+func TestListNodes_PerNodeDegradation(t *testing.T) {
+	connA := &fakeConn{
+		status: &cryptosv1.GetStatusResponse{
+			Status: &cryptosv1.NodeStatus{
+				Role:          cryptosv1.NodeRole_NODE_ROLE_ROOT,
+				IdentityState: cryptosv1.IdentityState_IDENTITY_STATE_ESTABLISHED,
+			},
+		},
+	}
+	connB := &fakeConn{err: errors.New("dial refused")}
+
+	svc := New(testStore(), dialFor(map[string]*fakeConn{"A": connA, "B": connB}))
+
+	resp, err := svc.ListNodes(context.Background(), connect.NewRequest(&fleetv1.ListNodesRequest{}))
+	if err != nil {
+		t.Fatalf("ListNodes() error = %v, want nil", err)
+	}
+
+	nodes := resp.Msg.GetNodes()
+	if len(nodes) != 2 {
+		t.Fatalf("len(nodes) = %d, want 2", len(nodes))
+	}
+
+	byName := map[string]*fleetv1.NodeSummary{}
+	for _, n := range nodes {
+		byName[n.GetName()] = n
+	}
+
+	a := byName["A"]
+	if a == nil {
+		t.Fatal("missing summary for A")
+	}
+	if a.GetHealth() != fleetv1.Health_HEALTH_UP {
+		t.Errorf("A.Health = %v, want HEALTH_UP", a.GetHealth())
+	}
+	if a.GetRole() != "root" {
+		t.Errorf("A.Role = %q, want root", a.GetRole())
+	}
+	if a.GetIdentityState() != "ESTABLISHED" {
+		t.Errorf("A.IdentityState = %q, want ESTABLISHED", a.GetIdentityState())
+	}
+
+	b := byName["B"]
+	if b == nil {
+		t.Fatal("missing summary for B")
+	}
+	if b.GetHealth() != fleetv1.Health_HEALTH_DOWN {
+		t.Errorf("B.Health = %v, want HEALTH_DOWN", b.GetHealth())
+	}
+	if b.GetHealthDetail() == "" {
+		t.Error("B.HealthDetail is empty, want the dial error text")
+	}
+
+	if !connA.closed {
+		t.Error("connA was not closed")
+	}
+	if !connB.closed {
+		t.Error("connB dial returned an error so there is no conn to close, but fake still shouldn't leak state")
+	}
+}
+
+func TestGetNode_ReturnsDetailWithIdentity(t *testing.T) {
+	connA := &fakeConn{
+		status: &cryptosv1.GetStatusResponse{
+			Status: &cryptosv1.NodeStatus{
+				Role:          cryptosv1.NodeRole_NODE_ROLE_ROOT,
+				IdentityState: cryptosv1.IdentityState_IDENTITY_STATE_ESTABLISHED,
+				TpmState:      cryptosv1.TpmState_TPM_STATE_OK,
+				BootCount:     3,
+			},
+		},
+		identity: &cryptosv1.GetIdentityResponse{
+			Identity: &cryptosv1.Identity{
+				ChainPem:   "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n",
+				ChainDer:   [][]byte{[]byte("fake-der")},
+				LeafSha256: []byte{0xde, 0xad, 0xbe, 0xef},
+			},
+		},
+	}
+
+	svc := New(testStore(), dialFor(map[string]*fakeConn{"A": connA}))
+
+	resp, err := svc.GetNode(context.Background(), connect.NewRequest(&fleetv1.GetNodeRequest{Name: "A"}))
+	if err != nil {
+		t.Fatalf("GetNode(A) error = %v, want nil", err)
+	}
+
+	detail := resp.Msg.GetNode()
+	if detail == nil {
+		t.Fatal("GetNode(A) returned nil detail")
+	}
+	if detail.GetSummary().GetHealth() != fleetv1.Health_HEALTH_UP {
+		t.Errorf("detail.Summary.Health = %v, want HEALTH_UP", detail.GetSummary().GetHealth())
+	}
+	if detail.GetIdentity().GetChainPem() != connA.identity.GetIdentity().GetChainPem() {
+		t.Errorf("detail.Identity.ChainPem = %q, want %q", detail.GetIdentity().GetChainPem(), connA.identity.GetIdentity().GetChainPem())
+	}
+	if detail.GetTpmAvailable() != true {
+		t.Error("detail.TpmAvailable = false, want true (TpmState = TPM_STATE_OK)")
+	}
+	if detail.GetBootCount() != 3 {
+		t.Errorf("detail.BootCount = %d, want 3", detail.GetBootCount())
+	}
+}
+
+func TestGetNode_NotFound(t *testing.T) {
+	svc := New(testStore(), dialFor(map[string]*fakeConn{}))
+
+	_, err := svc.GetNode(context.Background(), connect.NewRequest(&fleetv1.GetNodeRequest{Name: "missing"}))
+	if err == nil {
+		t.Fatal("GetNode(missing) error = nil, want NotFound")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("GetNode(missing) error is not a *connect.Error: %v", err)
+	}
+	if connectErr.Code() != connect.CodeNotFound {
+		t.Errorf("GetNode(missing) error code = %v, want CodeNotFound", connectErr.Code())
+	}
+}

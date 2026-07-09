@@ -36,6 +36,8 @@ import (
 type NodeConn interface {
 	GetStatus(ctx context.Context) (*cryptosv1.GetStatusResponse, error)
 	GetIdentity(ctx context.Context) (*cryptosv1.GetIdentityResponse, error)
+	ListIssued(ctx context.Context) (*cryptosv1.ListIssuedResponse, error)
+	ListRevocations(ctx context.Context) (*cryptosv1.ListRevocationsResponse, error)
 	Close() error
 }
 

@@ -61,6 +61,22 @@ func (fakeNodeService) GetIdentity(context.Context, *cryptosv1.GetIdentityReques
 	}, nil
 }
 
+func (fakeNodeService) ListIssued(context.Context, *cryptosv1.ListIssuedRequest) (*cryptosv1.ListIssuedResponse, error) {
+	return &cryptosv1.ListIssuedResponse{
+		Issued: []*cryptosv1.IssuedCert{
+			{SerialHex: "fake-issued-test-marker"},
+		},
+	}, nil
+}
+
+func (fakeNodeService) ListRevocations(context.Context, *cryptosv1.ListRevocationsRequest) (*cryptosv1.ListRevocationsResponse, error) {
+	return &cryptosv1.ListRevocationsResponse{
+		Revocations: []*cryptosv1.Revocation{
+			{SerialHex: "fake-revoked-test-marker"},
+		},
+	}, nil
+}
+
 // testCA is a minimal self-signed CA used to mint both the fake node's
 // server cert and the test admin client cert.
 type testCA struct {
@@ -249,6 +265,22 @@ func TestDial_GetStatus_GetIdentity(t *testing.T) {
 	wantChain := "-----BEGIN CERTIFICATE-----\nfake-identity-test-marker\n-----END CERTIFICATE-----\n"
 	if got := identityResp.GetIdentity().GetChainPem(); got != wantChain {
 		t.Errorf("GetIdentity().Identity.ChainPem = %q, want %q", got, wantChain)
+	}
+
+	issuedResp, err := client.ListIssued(ctx)
+	if err != nil {
+		t.Fatalf("ListIssued() error = %v, want nil", err)
+	}
+	if len(issuedResp.GetIssued()) != 1 || issuedResp.GetIssued()[0].GetSerialHex() != "fake-issued-test-marker" {
+		t.Errorf("ListIssued().Issued = %v, want one entry with serial fake-issued-test-marker", issuedResp.GetIssued())
+	}
+
+	revocationsResp, err := client.ListRevocations(ctx)
+	if err != nil {
+		t.Fatalf("ListRevocations() error = %v, want nil", err)
+	}
+	if len(revocationsResp.GetRevocations()) != 1 || revocationsResp.GetRevocations()[0].GetSerialHex() != "fake-revoked-test-marker" {
+		t.Errorf("ListRevocations().Revocations = %v, want one entry with serial fake-revoked-test-marker", revocationsResp.GetRevocations())
 	}
 }
 

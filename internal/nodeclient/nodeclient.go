@@ -79,6 +79,16 @@ func (c *Client) GetIdentity(ctx context.Context) (*cryptosv1.GetIdentityRespons
 	return c.node.GetIdentity(ctx, &cryptosv1.GetIdentityRequest{})
 }
 
+// ListIssued returns the certificates this node has issued.
+func (c *Client) ListIssued(ctx context.Context) (*cryptosv1.ListIssuedResponse, error) {
+	return c.node.ListIssued(ctx, &cryptosv1.ListIssuedRequest{})
+}
+
+// ListRevocations returns this node's revoked certificates.
+func (c *Client) ListRevocations(ctx context.Context) (*cryptosv1.ListRevocationsResponse, error) {
+	return c.node.ListRevocations(ctx, &cryptosv1.ListRevocationsRequest{})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

@@ -1,0 +1,115 @@
+package config
+
+/*
+Apache License 2.0
+
+Copyright 2026 Shane
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoad_RealExampleConfig(t *testing.T) {
+	cfg, err := Load("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.Listen != "127.0.0.1:8080" {
+		t.Errorf("Listen = %q, want 127.0.0.1:8080", cfg.Listen)
+	}
+	if !cfg.AuthBypass {
+		t.Errorf("AuthBypass = false, want true")
+	}
+	if len(cfg.Nodes) != 2 {
+		t.Fatalf("len(Nodes) = %d, want 2", len(cfg.Nodes))
+	}
+
+	root := cfg.Nodes[0]
+	if root.Name != "pki-root" {
+		t.Errorf("Nodes[0].Name = %q, want pki-root", root.Name)
+	}
+	if root.Endpoint != "pki-root.acme.com:4443" {
+		t.Errorf("Nodes[0].Endpoint = %q, want pki-root.acme.com:4443", root.Endpoint)
+	}
+	if root.Role != "root" {
+		t.Errorf("Nodes[0].Role = %q, want root", root.Role)
+	}
+
+	inter := cfg.Nodes[1]
+	if inter.Name != "pki-inter" {
+		t.Errorf("Nodes[1].Name = %q, want pki-inter", inter.Name)
+	}
+	if inter.Endpoint != "pki-inter.acme.com:4444" {
+		t.Errorf("Nodes[1].Endpoint = %q, want pki-inter.acme.com:4444", inter.Endpoint)
+	}
+	if inter.Role != "intermediate" {
+		t.Errorf("Nodes[1].Role = %q, want intermediate", inter.Role)
+	}
+}
+
+func TestLoad_MissingFile(t *testing.T) {
+	_, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
+	if err == nil {
+		t.Fatal("Load() error = nil, want error for missing file")
+	}
+}
+
+func TestLoad_NodeMissingEndpoint(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+listen: "127.0.0.1:8080"
+nodes:
+  - name: pki-root
+    role: root
+    adminCertPath: /tmp/admin.crt
+    adminKeyPath: /tmp/admin.key
+    caCertPath: /tmp/ca.pem
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error for node missing endpoint")
+	}
+}
+
+func TestLoad_MissingListen(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+nodes:
+  - name: pki-root
+    endpoint: "pki-root.acme.com:4443"
+    role: root
+    adminCertPath: /tmp/admin.crt
+    adminKeyPath: /tmp/admin.key
+    caCertPath: /tmp/ca.pem
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load() error = nil, want error for missing listen")
+	}
+}

@@ -28,3 +28,6 @@ coverage/
 
 # Local design notes (non-tracked).
 plan/
+
+# Local runtime config (copy config.example.yaml -> config.yaml).
+/config.yaml

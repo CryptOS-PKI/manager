@@ -1,6 +1,18 @@
 version: "3"
 
 tasks:
+  build:
+    desc: Build every package.
+    cmds:
+      - go build ./...
+  test:
+    desc: Run the test suite.
+    cmds:
+      - go test ./...
+  run:
+    desc: Run the manager server against config.yaml.
+    cmds:
+      - go run ./cmd/manager -config config.yaml
   license:
     desc: Verify every source file carries the Apache 2.0 license header (CI; never writes).
     cmds:

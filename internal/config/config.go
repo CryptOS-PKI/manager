@@ -31,10 +31,18 @@ import (
 // on, the CORS origins it allows, whether to bypass auth (dev-only), and
 // the static fleet inventory it dials out to.
 type Config struct {
-	Listen      string    `yaml:"listen"`
-	CORSOrigins []string  `yaml:"corsOrigins"`
-	AuthBypass  bool      `yaml:"authBypass"`
-	Nodes       []NodeCfg `yaml:"nodes"`
+	Listen      string   `yaml:"listen"`
+	CORSOrigins []string `yaml:"corsOrigins"`
+	AuthBypass  bool     `yaml:"authBypass"`
+
+	// TLS + client-auth material. Required when AuthBypass is false: the
+	// manager then serves HTTPS with RequireAndVerifyClientCert against
+	// OperatorCA. Ignored in the AuthBypass dev path (h2c).
+	TLSCert        string `yaml:"tlsCert"`
+	TLSKey         string `yaml:"tlsKey"`
+	OperatorCAPath string `yaml:"operatorCAPath"`
+
+	Nodes []NodeCfg `yaml:"nodes"`
 }
 
 // NodeCfg describes one fleet node: where to dial it, its role, and the
@@ -74,6 +82,15 @@ func Load(path string) (Config, error) {
 func (c Config) validate() error {
 	if c.Listen == "" {
 		return fmt.Errorf("listen must not be empty")
+	}
+
+	if !c.AuthBypass {
+		if c.TLSCert == "" || c.TLSKey == "" {
+			return fmt.Errorf("tlsCert and tlsKey are required when authBypass is false")
+		}
+		if c.OperatorCAPath == "" {
+			return fmt.Errorf("operatorCAPath is required when authBypass is false")
+		}
 	}
 
 	for i, n := range c.Nodes {

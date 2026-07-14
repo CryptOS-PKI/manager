@@ -1,3 +1,6 @@
+// Package authz derives and carries the operator identity for the manager's
+// management plane: the access-level certificate codec plus the client-cert
+// verification middleware that runs ahead of the Connect handlers.
 package authz
 
 /*

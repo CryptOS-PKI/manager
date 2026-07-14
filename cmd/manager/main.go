@@ -22,11 +22,14 @@ limitations under the License.
 */
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 
-	connect "connectrpc.com/connect"
 	fleetv1connect "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1/fleetv1connect"
 	"github.com/CryptOS-PKI/manager/internal/authz"
 	"github.com/CryptOS-PKI/manager/internal/config"
@@ -73,24 +76,67 @@ func main() {
 
 	svc := fleet.New(st, dial)
 
-	path, handler := fleetv1connect.NewFleetServiceHandler(svc, connect.WithInterceptors(authz.Bypass()))
+	path, handler := fleetv1connect.NewFleetServiceHandler(svc)
 
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
 
-	corsHandler := withCORS(cfg.CORSOrigins, mux)
+	// Auth is HTTP middleware, not a Connect interceptor: only the HTTP layer
+	// sees the TLS peer certificate. Bypass injects a dev identity over h2c;
+	// the real path verifies the client cert the TLS listener required.
+	authMW := authz.ClientCertMiddleware
+	if cfg.AuthBypass {
+		authMW = authz.BypassMiddleware
+	}
+	rootHandler := withCORS(cfg.CORSOrigins, authMW(mux))
 
-	log.Printf("manager: listening on %s (h2c), %d node(s) configured, catalog seeded (%d profiles, %d adapters, %d audit events, %d enrollments)",
-		cfg.Listen, len(nodes), len(profiles), len(adapters), len(audit), len(enrollments))
+	log.Printf("manager: %d node(s) configured, catalog seeded (%d profiles, %d adapters, %d audit events, %d enrollments)",
+		len(nodes), len(profiles), len(adapters), len(audit), len(enrollments))
 
-	server := &http.Server{
-		Addr:    cfg.Listen,
-		Handler: h2c.NewHandler(corsHandler, &http2.Server{}),
+	server := &http.Server{Addr: cfg.Listen}
+
+	if cfg.AuthBypass {
+		server.Handler = h2c.NewHandler(rootHandler, &http2.Server{})
+		log.Printf("manager: listening on %s (authBypass=true, h2c)", cfg.Listen)
+		if err := server.ListenAndServe(); err != nil {
+			log.Fatalf("manager: serve: %v", err)
+		}
+		return
 	}
 
-	if err := server.ListenAndServe(); err != nil {
+	tlsCfg, err := buildTLSConfig(cfg)
+	if err != nil {
+		log.Fatalf("manager: tls: %v", err)
+	}
+	server.Handler = rootHandler // TLS negotiates HTTP/2 via ALPN; no h2c
+	server.TLSConfig = tlsCfg
+	log.Printf("manager: listening on %s (mTLS client-cert auth)", cfg.Listen)
+	if err := server.ListenAndServeTLS("", ""); err != nil {
 		log.Fatalf("manager: serve: %v", err)
 	}
+}
+
+// buildTLSConfig builds the server TLS config: the adopter-provided server
+// cert/key plus RequireAndVerifyClientCert against the operator CA.
+func buildTLSConfig(cfg config.Config) (*tls.Config, error) {
+	serverCert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+	if err != nil {
+		return nil, fmt.Errorf("load server cert: %w", err)
+	}
+	caPEM, err := os.ReadFile(cfg.OperatorCAPath)
+	if err != nil {
+		return nil, fmt.Errorf("read operator CA: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("operator CA %s contains no PEM certificates", cfg.OperatorCAPath)
+	}
+	return &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    pool,
+		MinVersion:   tls.VersionTLS12,
+	}, nil
 }
 
 // withCORS wraps next with a CORS handler that allows the given origins to

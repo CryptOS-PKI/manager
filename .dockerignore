@@ -1,0 +1,8 @@
+plan/
+docs/
+*.md
+.git
+.github
+config.yaml
+config-tls.yaml
+.superpowers/

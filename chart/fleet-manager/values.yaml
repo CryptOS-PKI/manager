@@ -1,0 +1,28 @@
+image:
+  repository: ghcr.io/cryptos-pki/manager
+  tag: ""            # defaults to .Chart.appVersion
+  pullPolicy: IfNotPresent
+
+replicaCount: 2
+
+service:
+  port: 443
+  targetPort: 8443
+
+# Manager listen address inside the container.
+listen: "0.0.0.0:8443"
+
+# Dev-only. Leave false for real deployments (enables mTLS client-cert auth).
+authBypass: false
+
+corsOrigins: []
+
+# Bring-your-own trust material (object names in the release namespace).
+tls:
+  certSecret: ""     # TLS secret with tls.crt / tls.key for the server cert
+operatorCA:
+  configMap: ""      # ConfigMap with operator-ca.pem (client-auth trust anchor)
+
+# Fleet node inventory. Each node's admin cert/key/ca are mounted separately by
+# the operator; paths here must match those mounts.
+nodes: []

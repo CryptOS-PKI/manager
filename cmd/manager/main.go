@@ -38,6 +38,7 @@ import (
 	"github.com/CryptOS-PKI/manager/internal/store"
 	"github.com/CryptOS-PKI/manager/internal/store/memory"
 	"github.com/CryptOS-PKI/manager/internal/store/seed"
+	"github.com/CryptOS-PKI/manager/internal/webui"
 	"golang.org/x/net/http2"
 	"golang.org/x/net/http2/h2c"
 )
@@ -80,6 +81,12 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.Handle(path, handler)
+
+	web, err := webui.Handler()
+	if err != nil {
+		log.Fatalf("manager: webui: %v", err)
+	}
+	mux.Handle("/", web)
 
 	// Auth is HTTP middleware, not a Connect interceptor: only the HTTP layer
 	// sees the TLS peer certificate. Bypass injects a dev identity over h2c;

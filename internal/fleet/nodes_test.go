@@ -20,8 +20,15 @@ limitations under the License.
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"errors"
+	"math/big"
 	"testing"
+	"time"
 
 	connect "connectrpc.com/connect"
 	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
@@ -203,6 +210,75 @@ func TestGetNode_ReturnsDetailWithIdentity(t *testing.T) {
 	if detail.GetBootCount() != 3 {
 		t.Errorf("detail.BootCount = %d, want 3", detail.GetBootCount())
 	}
+}
+
+// signCert builds a DER certificate for cn signed by the parent cert/key. When
+// parent is nil the cert is self-signed (a root): it is signed with its own
+// freshly generated key and its issuer is its own subject.
+func signCert(t *testing.T, cn string, parent *x509.Certificate, parentKey *ecdsa.PrivateKey) ([]byte, *x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	signer, signerKey := parent, parentKey
+	if signer == nil {
+		signer, signerKey = tmpl, key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, signer, &key.PublicKey, signerKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate(%s): %v", cn, err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate(%s): %v", cn, err)
+	}
+	return der, cert, key
+}
+
+func TestLeafCNs(t *testing.T) {
+	rootDER, rootCert, rootKey := signCert(t, "ACME Root CA", nil, nil)
+	interDER, _, _ := signCert(t, "ACME Intermediate CA", rootCert, rootKey)
+
+	t.Run("self-signed root has issuer == cn", func(t *testing.T) {
+		cn, issuer := leafCNs(&cryptosv1.Identity{ChainDer: [][]byte{rootDER}})
+		if cn != "ACME Root CA" || issuer != "ACME Root CA" {
+			t.Errorf("leafCNs(root) = (%q, %q), want (ACME Root CA, ACME Root CA)", cn, issuer)
+		}
+	})
+
+	t.Run("subordinate issuer names the parent CA", func(t *testing.T) {
+		cn, issuer := leafCNs(&cryptosv1.Identity{ChainDer: [][]byte{interDER, rootDER}})
+		if cn != "ACME Intermediate CA" || issuer != "ACME Root CA" {
+			t.Errorf("leafCNs(intermediate) = (%q, %q), want (ACME Intermediate CA, ACME Root CA)", cn, issuer)
+		}
+	})
+
+	t.Run("nil identity yields empty", func(t *testing.T) {
+		if cn, issuer := leafCNs(nil); cn != "" || issuer != "" {
+			t.Errorf("leafCNs(nil) = (%q, %q), want empty", cn, issuer)
+		}
+	})
+
+	t.Run("empty chain yields empty", func(t *testing.T) {
+		if cn, issuer := leafCNs(&cryptosv1.Identity{}); cn != "" || issuer != "" {
+			t.Errorf("leafCNs(empty) = (%q, %q), want empty", cn, issuer)
+		}
+	})
+
+	t.Run("unparseable leaf yields empty", func(t *testing.T) {
+		if cn, issuer := leafCNs(&cryptosv1.Identity{ChainDer: [][]byte{[]byte("not-a-cert")}}); cn != "" || issuer != "" {
+			t.Errorf("leafCNs(garbage) = (%q, %q), want empty", cn, issuer)
+		}
+	})
 }
 
 func TestGetNode_NotFound(t *testing.T) {

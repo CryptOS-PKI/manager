@@ -113,3 +113,28 @@ nodes:
 		t.Fatal("Load() error = nil, want error for missing listen")
 	}
 }
+
+func TestValidate_TLSRequiredWhenNotBypass(t *testing.T) {
+	c := Config{Listen: "0.0.0.0:8443", AuthBypass: false}
+	if err := c.validate(); err == nil {
+		t.Fatal("validate() = nil, want error for missing TLS material when authBypass=false")
+	}
+
+	c = Config{
+		Listen:         "0.0.0.0:8443",
+		AuthBypass:     false,
+		TLSCert:        "/srv/tls.crt",
+		TLSKey:         "/srv/tls.key",
+		OperatorCAPath: "/srv/operator-ca.pem",
+	}
+	if err := c.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil with TLS material present", err)
+	}
+}
+
+func TestValidate_TLSOptionalWhenBypass(t *testing.T) {
+	c := Config{Listen: "127.0.0.1:8080", AuthBypass: true}
+	if err := c.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil (bypass needs no TLS)", err)
+	}
+}

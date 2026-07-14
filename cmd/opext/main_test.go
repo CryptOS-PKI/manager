@@ -21,19 +21,32 @@ limitations under the License.
 import (
 	"bytes"
 	"encoding/asn1"
-	"encoding/base64"
+	"strconv"
+	"strings"
 	"testing"
 )
 
-func TestRun_PrintsBase64DERForLevel(t *testing.T) {
+// parseByteSeq turns opext's "[19, 5, 97, ...]" output back into the DER bytes.
+func parseByteSeq(t *testing.T, s string) []byte {
+	t.Helper()
+	inner := strings.Trim(strings.TrimSpace(s), "[]")
+	var der []byte
+	for _, p := range strings.Split(inner, ",") {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			t.Fatalf("byte %q: %v", p, err)
+		}
+		der = append(der, byte(n))
+	}
+	return der
+}
+
+func TestRun_EmitsDERByteSequenceForLevel(t *testing.T) {
 	var out bytes.Buffer
 	if err := run("admin", &out); err != nil {
 		t.Fatalf("run: %v", err)
 	}
-	der, err := base64.StdEncoding.DecodeString(string(bytes.TrimSpace(out.Bytes())))
-	if err != nil {
-		t.Fatalf("output not base64: %v", err)
-	}
+	der := parseByteSeq(t, out.String())
 	var token string
 	if _, err := asn1.Unmarshal(der, &token); err != nil || token != "admin" {
 		t.Fatalf("decoded %q err %v; want admin", token, err)

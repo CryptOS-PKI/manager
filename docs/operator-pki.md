@@ -15,17 +15,23 @@ X.509 extension:
   — the value must stay identical in the cryptos profile config and the manager
   verifier, which share the constant in `internal/authz/level.go`.
 - **Value:** the DER of an ASN.1 string of the level token — `viewer`,
-  `operator`, or `admin`. Produce the base64 an adopter pastes into config with
-  the `opext` helper:
+  `operator`, or `admin`. The cryptos profile field `extra_extensions[].value`
+  is a Go `[]byte`, which yaml.v3 decodes from a **YAML sequence of byte
+  integers** (it does not base64-decode a scalar string into `[]byte`). Produce
+  the exact sequence to paste into config with the `opext` helper:
 
   ```console
   $ go run ./cmd/opext -level viewer
-  EwZ2aWV3ZXI=
+  [19, 6, 118, 105, 101, 119, 101, 114]
   $ go run ./cmd/opext -level operator
-  EwhvcGVyYXRvcg==
+  [19, 8, 111, 112, 101, 114, 97, 116, 111, 114]
   $ go run ./cmd/opext -level admin
-  EwVhZG1pbg==
+  [19, 5, 97, 100, 109, 105, 110]
   ```
+
+  (A future cryptos enhancement could add a custom `UnmarshalYAML` to
+  `X509Extension` so a base64 string works too; until then, the byte sequence is
+  the form the parser accepts.)
 
 Levels are cumulative: `viewer` sees the read-only surfaces; `operator` adds
 issue/revoke and enrollment approval (when write paths land); `admin` adds
@@ -65,7 +71,7 @@ pki:
       extra_extensions:
         - oid: "1.3.6.1.4.1.59999.1.1"
           critical: false
-          value: "EwZ2aWV3ZXI="        # opext -level viewer
+          value: [19, 6, 118, 105, 101, 119, 101, 114]   # opext -level viewer
     - name: operator-operator
       key_alg: "ECDSA-P384"
       subject:
@@ -78,7 +84,7 @@ pki:
       extra_extensions:
         - oid: "1.3.6.1.4.1.59999.1.1"
           critical: false
-          value: "EwhvcGVyYXRvcg=="    # opext -level operator
+          value: [19, 8, 111, 112, 101, 114, 97, 116, 111, 114]   # opext -level operator
     - name: operator-admin
       key_alg: "ECDSA-P384"
       subject:
@@ -91,7 +97,7 @@ pki:
       extra_extensions:
         - oid: "1.3.6.1.4.1.59999.1.1"
           critical: false
-          value: "EwVhZG1pbg=="        # opext -level admin
+          value: [19, 5, 97, 100, 109, 105, 110]   # opext -level admin
 ```
 
 The `operator-sub-ca` profile is a CA profile (`is_ca: true`, `path_len: 0`)

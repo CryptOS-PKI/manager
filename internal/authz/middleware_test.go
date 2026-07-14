@@ -86,6 +86,34 @@ func TestClientCertMiddleware_NoCert401(t *testing.T) {
 	}
 }
 
+func TestClientCertMiddleware_MissingExtension403(t *testing.T) {
+	// A verified peer cert that carries no access-level extension must be
+	// rejected (403), never passed through or defaulted to a privileged level.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(0x0abc),
+		Subject:      pkix.Name{CommonName: "op@acme.example"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/rpc", nil)
+	req.TLS = &tls.ConnectionState{PeerCertificates: []*x509.Certificate{cert}}
+	ClientCertMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		t.Error("next must not be called for a cert missing the access-level extension")
+	})).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
+	}
+}
+
 func TestBypassMiddleware_SetsDevIdentity(t *testing.T) {
 	var got Identity
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got, _ = FromContext(r.Context()) })

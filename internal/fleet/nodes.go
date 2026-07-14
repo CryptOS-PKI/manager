@@ -20,6 +20,7 @@ limitations under the License.
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"sync"
@@ -85,10 +86,11 @@ func (s *Service) GetNode(ctx context.Context, req *connect.Request[fleetv1.GetN
 	}
 
 	status := statusResp.GetStatus()
+	cn, issuer := leafCNs(identityResp.GetIdentity())
 
 	return connect.NewResponse(&fleetv1.GetNodeResponse{
 		Node: &fleetv1.NodeDetail{
-			Summary:      upSummary(n, status),
+			Summary:      upSummary(n, status, cn, issuer),
 			Identity:     mapIdentity(identityResp.GetIdentity()),
 			TpmAvailable: status.GetTpmState() == cryptosv1.TpmState_TPM_STATE_OK,
 			BootCount:    status.GetBootCount(),
@@ -110,18 +112,44 @@ func (s *Service) summarize(ctx context.Context, n store.Node) *fleetv1.NodeSumm
 		return downSummary(n, err)
 	}
 
-	return upSummary(n, statusResp.GetStatus())
+	// Also fetch identity to convey the node's CN + its trust parent (issuer)
+	// to the fleet view; tolerate failure (summary stays UP without CN/issuer).
+	cn, issuer := "", ""
+	if identityResp, ierr := conn.GetIdentity(ctx); ierr == nil {
+		cn, issuer = leafCNs(identityResp.GetIdentity())
+	}
+
+	return upSummary(n, statusResp.GetStatus(), cn, issuer)
 }
 
-// upSummary maps a successfully probed node's status to a NodeSummary.
-func upSummary(n store.Node, status *cryptosv1.NodeStatus) *fleetv1.NodeSummary {
+// upSummary maps a successfully probed node's status to a NodeSummary. cn and
+// issuer come from the node's leaf cert (see leafCNs); issuer lets the UI draw
+// the trust edge to the node's parent CA.
+func upSummary(n store.Node, status *cryptosv1.NodeStatus, cn, issuer string) *fleetv1.NodeSummary {
 	return &fleetv1.NodeSummary{
 		Name:          n.Name,
 		Address:       n.Endpoint,
 		Role:          n.Role,
 		IdentityState: mapIdentityState(status.GetIdentityState()),
+		Cn:            cn,
+		Issuer:        issuer,
 		Health:        fleetv1.Health_HEALTH_UP,
 	}
+}
+
+// leafCNs parses the leaf (first) cert of the identity chain and returns its
+// subject and issuer common names, empty if the chain is missing/unparseable.
+// A self-signed root has subject == issuer, so the UI treats it as having no
+// parent; a subordinate's issuer names its parent CA's subject CN.
+func leafCNs(id *cryptosv1.Identity) (cn, issuer string) {
+	if id == nil || len(id.GetChainDer()) == 0 {
+		return "", ""
+	}
+	leaf, err := x509.ParseCertificate(id.GetChainDer()[0])
+	if err != nil {
+		return "", ""
+	}
+	return leaf.Subject.CommonName, leaf.Issuer.CommonName
 }
 
 // downSummary builds a NodeSummary for a node that could not be reached or

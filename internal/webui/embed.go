@@ -44,7 +44,9 @@ func Handler() (http.Handler, error) {
 			serveIndex(w, index)
 			return
 		}
-		if _, statErr := fs.Stat(sub, r.URL.Path[1:]); statErr != nil {
+		// Serve only real files; a missing path OR a directory falls back to
+		// index.html (no directory listings from the embedded FS).
+		if info, statErr := fs.Stat(sub, r.URL.Path[1:]); statErr != nil || info.IsDir() {
 			serveIndex(w, index)
 			return
 		}

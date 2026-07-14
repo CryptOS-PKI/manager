@@ -22,9 +22,38 @@ Once linked, the node's embedded operator surface becomes read-only and FM owns 
 - Serves the [`web`](https://github.com/CryptOS-PKI/web) bundle (pinned version, embedded via `embed.FS`) on the same listener as the FM gRPC API.
 - Designed to run on Kubernetes (Deployment + Service + Ingress, Helm chart shipped alongside the container image). Single-node Docker / `docker compose` is supported for small deployments; K8s is the primary target.
 
+## 🚀 Deploying
+
+The manager ships as a **single self-contained image**: the Go binary with the `web` bundle embedded (`go:embed`), serving the SPA and the Connect API on **one** listener. In a real deployment that listener does mTLS client-cert auth (`authBypass: false`), so operators authenticate with a browser-installed client certificate — see [`docs/operator-pki.md`](docs/operator-pki.md) for minting an operator cert.
+
+Bring your own trust material: a **server TLS cert** (`tlsCert`/`tlsKey`, any public or CryptOS-issued cert) and the **operator CA** (`operatorCAPath`, the client-auth trust anchor). No usernames or passwords are stored.
+
+**Docker:**
+
+```sh
+docker run -p 443:8443 \
+  -v /etc/cryptos/fleet:/etc/cryptos/fleet:ro \
+  ghcr.io/cryptos-pki/manager:vX.Y.Z
+# config.yaml (authBypass:false, tlsCert/tlsKey, operatorCAPath, nodes[]) + the
+# referenced cert/key/CA files live under the mounted /etc/cryptos/fleet.
+```
+
+**Helm (OCI):**
+
+```sh
+helm install fleet oci://ghcr.io/cryptos-pki/charts/fleet-manager --version X.Y.Z \
+  --set tls.certSecret=<server-tls-secret> \
+  --set operatorCA.configMap=<operator-ca-configmap> \
+  --set-json 'nodes=[{"name":"pki-root","endpoint":"pki-root.example:443","role":"root","adminCertPath":"...","adminKeyPath":"...","caCertPath":"..."}]'
+```
+
+## 📦 Releasing
+
+Nothing tags automatically. On push to `main`, release-drafter categorises the merged conventional-commit PRs into the draft release notes, and [`Bugs5382/changelog-updater-action`](https://github.com/Bugs5382/changelog-updater-action) writes those notes into `CHANGELOG.md` (committed back to `main` as a `[skip ci]` pre-release commit). The maintainer then publishes the GitHub Release by hand, which creates the `vX.Y.Z` tag. That tag triggers `job-release-image.yaml`, which builds and pushes the container image (`ghcr.io/cryptos-pki/manager`) via BuildKit and packages+pushes the Helm chart (`oci://ghcr.io/cryptos-pki/charts/fleet-manager`). The node ISO ships from [`cryptos`](https://github.com/CryptOS-PKI/cryptos). The image and chart assume no particular deploy environment — adopters bring their own registry, trust material, and orchestrator. (The repo's own release/governance tooling — release-drafter, `Bugs5382/changelog-updater-action`, golic — is the maintainer's; adopters don't need it.)
+
 ## 🚦 Status
 
-**Pre-alpha.** Backend implementation begins in Phase 2; this repo is currently a placeholder.
+**Alpha.** Read-only fleet integration and mTLS client-cert auth are implemented; write paths and the Postgres inventory adapter are in progress.
 
 ## 🧭 Companion repos
 

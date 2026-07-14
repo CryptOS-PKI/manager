@@ -1,0 +1,6 @@
+apiVersion: v2
+name: fleet-manager
+description: CryptOS Fleet Manager — management plane for a CryptOS PKI fleet.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

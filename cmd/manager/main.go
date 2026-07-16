@@ -77,6 +77,19 @@ func main() {
 
 	svc := fleet.New(st, dial)
 
+	pemDial := func(endpoint, certPEM, keyPEM, caPEM string) (fleet.NodeConn, error) {
+		return nodeclient.DialPEM(endpoint, certPEM, keyPEM, caPEM)
+	}
+	var operatorCAPEM string
+	if cfg.OperatorCAPath != "" {
+		b, err := os.ReadFile(cfg.OperatorCAPath)
+		if err != nil {
+			log.Fatalf("manager: read operator CA: %v", err)
+		}
+		operatorCAPEM = string(b)
+	}
+	svc = svc.WithEnrollment(pemDial, operatorCAPEM)
+
 	path, handler := fleetv1connect.NewFleetServiceHandler(svc)
 
 	mux := http.NewServeMux()

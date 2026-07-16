@@ -136,3 +136,100 @@ func TestStore_NewWithCatalog_RoundTrip(t *testing.T) {
 		t.Errorf("Nodes() len = %d, want 2", len(got))
 	}
 }
+
+func TestStore_AddEnrollment(t *testing.T) {
+	s := New(testNodes())
+
+	s.AddEnrollment(store.Enrollment{ID: "enr-0001", ProposedName: "acme-issuing-04", Status: "PENDING"})
+
+	got, ok := s.Enrollment("enr-0001")
+	if !ok {
+		t.Fatal("Enrollment(\"enr-0001\") ok = false, want true")
+	}
+	if got.ProposedName != "acme-issuing-04" {
+		t.Errorf("Enrollment(\"enr-0001\").ProposedName = %q, want acme-issuing-04", got.ProposedName)
+	}
+
+	all := s.Enrollments()
+	if len(all) != 1 {
+		t.Fatalf("len(Enrollments()) = %d, want 1", len(all))
+	}
+	if all[0].ID != "enr-0001" {
+		t.Errorf("Enrollments()[0].ID = %q, want enr-0001", all[0].ID)
+	}
+}
+
+func TestStore_Enrollment_NotFound(t *testing.T) {
+	s := New(testNodes())
+
+	_, ok := s.Enrollment("does-not-exist")
+	if ok {
+		t.Fatal("Enrollment(\"does-not-exist\") ok = true, want false")
+	}
+}
+
+func TestStore_UpdateEnrollment(t *testing.T) {
+	s := New(testNodes())
+	s.AddEnrollment(store.Enrollment{ID: "enr-0001", Status: "PENDING"})
+
+	err := s.UpdateEnrollment("enr-0001", func(e *store.Enrollment) {
+		e.Status = "APPROVED"
+	})
+	if err != nil {
+		t.Fatalf("UpdateEnrollment() error = %v, want nil", err)
+	}
+
+	got, ok := s.Enrollment("enr-0001")
+	if !ok {
+		t.Fatal("Enrollment(\"enr-0001\") ok = false, want true")
+	}
+	if got.Status != "APPROVED" {
+		t.Errorf("Enrollment(\"enr-0001\").Status = %q, want APPROVED", got.Status)
+	}
+}
+
+func TestStore_UpdateEnrollment_NotFound(t *testing.T) {
+	s := New(testNodes())
+
+	err := s.UpdateEnrollment("does-not-exist", func(e *store.Enrollment) {
+		e.Status = "APPROVED"
+	})
+	if err == nil {
+		t.Fatal("UpdateEnrollment(\"does-not-exist\") error = nil, want non-nil")
+	}
+}
+
+func TestStore_Enrollment_ReturnsCopy(t *testing.T) {
+	s := New(testNodes())
+	s.AddEnrollment(store.Enrollment{ID: "enr-0001", Status: "PENDING"})
+
+	got, ok := s.Enrollment("enr-0001")
+	if !ok {
+		t.Fatal("Enrollment(\"enr-0001\") ok = false, want true")
+	}
+	got.Status = "APPROVED"
+
+	again, ok := s.Enrollment("enr-0001")
+	if !ok {
+		t.Fatal("Enrollment(\"enr-0001\") ok = false, want true")
+	}
+	if again.Status != "PENDING" {
+		t.Errorf("Enrollment(\"enr-0001\").Status = %q after mutating a returned copy, want PENDING", again.Status)
+	}
+}
+
+func TestStore_Enrollments_ReturnsCopy(t *testing.T) {
+	s := New(testNodes())
+	s.AddEnrollment(store.Enrollment{ID: "enr-0001", Status: "PENDING"})
+
+	all := s.Enrollments()
+	all[0].Status = "APPROVED"
+
+	again, ok := s.Enrollment("enr-0001")
+	if !ok {
+		t.Fatal("Enrollment(\"enr-0001\") ok = false, want true")
+	}
+	if again.Status != "PENDING" {
+		t.Errorf("Enrollment(\"enr-0001\").Status = %q after mutating Enrollments() slice, want PENDING", again.Status)
+	}
+}

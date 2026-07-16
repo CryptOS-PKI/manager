@@ -125,5 +125,7 @@ func enrollmentToProto(r store.Enrollment) *fleetv1.EnrollmentRequest {
 		RequestedAt:        r.RequestedAt,
 		RejectionReason:    r.RejectionReason,
 		AdmittedNodeName:   r.AdmittedNodeName,
+		Kind:               r.Kind,
+		PinnedKeySha256:    r.PinnedKeySHA256,
 	}
 }

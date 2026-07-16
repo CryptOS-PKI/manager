@@ -23,6 +23,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha512"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -45,6 +46,29 @@ type fakeConn struct {
 	revocations *cryptosv1.ListRevocationsResponse
 	err         error
 	closed      bool
+
+	// attestKey, when set, makes Attest sign the nonce for real (mirroring
+	// the node's CA-identity signer) instead of returning a zero response.
+	attestKey *ecdsa.PrivateKey
+	// attestBadSig makes Attest sign a digest that does NOT match the
+	// nonce it was given, so verifyAttestation must reject the signature.
+	attestBadSig bool
+	// gotNonce records the nonce the fake received, so a test can assert
+	// verifyAttestation actually sent one.
+	gotNonce []byte
+
+	// gotManagement records the Management the fake received via
+	// SetManagement, so a test can assert what a LINK approval pushed.
+	gotManagement *cryptosv1.Management
+	// gotCSRProfile records the profile name SignSubordinateCSR was called
+	// with, so a test can assert the ferry used the enrollment's profile.
+	gotCSRProfile string
+	// signSubordinateResp, when set, is returned by SignSubordinateCSR
+	// instead of the zero-value response.
+	signSubordinateResp *cryptosv1.SignSubordinateCSRResponse
+	// calls records the ordered sequence of ferry-relevant method names
+	// invoked on this fake, so a test can assert call order.
+	calls *[]string
 }
 
 func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {
@@ -73,6 +97,86 @@ func (f *fakeConn) ListRevocations(context.Context) (*cryptosv1.ListRevocationsR
 		return nil, f.err
 	}
 	return f.revocations, nil
+}
+
+func (f *fakeConn) Attest(_ context.Context, nonce []byte) (*cryptosv1.AttestResponse, error) {
+	f.gotNonce = nonce
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.attestKey == nil {
+		return &cryptosv1.AttestResponse{}, nil
+	}
+	signed := nonce
+	if f.attestBadSig {
+		// Sign different bytes than the nonce so the signature is valid
+		// ASN.1 but does not verify against the nonce's digest.
+		signed = append([]byte("wrong-bytes-"), nonce...)
+	}
+	digest := sha512.Sum384(signed)
+	sig, err := ecdsa.SignASN1(rand.Reader, f.attestKey, digest[:])
+	if err != nil {
+		return nil, err
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&f.attestKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return &cryptosv1.AttestResponse{
+		Signature:      sig,
+		IdentityPubDer: pubDER,
+	}, nil
+}
+
+func (f *fakeConn) GetSubordinateCSR(context.Context) (*cryptosv1.GetSubordinateCSRResponse, error) {
+	f.record("GetSubordinateCSR")
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.GetSubordinateCSRResponse{}, nil
+}
+
+func (f *fakeConn) SignSubordinateCSR(_ context.Context, _ []byte, profile string) (*cryptosv1.SignSubordinateCSRResponse, error) {
+	f.record("SignSubordinateCSR")
+	f.gotCSRProfile = profile
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.signSubordinateResp != nil {
+		return f.signSubordinateResp, nil
+	}
+	return &cryptosv1.SignSubordinateCSRResponse{}, nil
+}
+
+func (f *fakeConn) SubmitSubordinateCertificate(context.Context, [][]byte, string) (*cryptosv1.SubmitSubordinateCertificateResponse, error) {
+	f.record("SubmitSubordinateCertificate")
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.SubmitSubordinateCertificateResponse{}, nil
+}
+
+func (f *fakeConn) ApplyConfig(context.Context, *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.ApplyConfigResponse{}, nil
+}
+
+func (f *fakeConn) SetManagement(_ context.Context, m *cryptosv1.Management) (*cryptosv1.SetManagementResponse, error) {
+	f.gotManagement = m
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.SetManagementResponse{}, nil
+}
+
+// record appends name to the shared call log, if this fake was given one.
+// Used by the SUBORDINATE ferry tests to assert child/parent call order.
+func (f *fakeConn) record(name string) {
+	if f.calls != nil {
+		*f.calls = append(*f.calls, name)
+	}
 }
 
 func (f *fakeConn) Close() error {

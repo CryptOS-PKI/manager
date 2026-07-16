@@ -10,7 +10,7 @@ require (
 require connectrpc.com/connect v1.20.0
 
 require (
-	github.com/CryptOS-PKI/api v0.0.0-20260714121350-86221c2a8079
+	github.com/CryptOS-PKI/api v0.0.0-20260716141902-8bd9295b7ffd
 	golang.org/x/net v0.51.0
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

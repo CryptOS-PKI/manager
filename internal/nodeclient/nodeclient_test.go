@@ -20,6 +20,8 @@ limitations under the License.
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -325,5 +327,59 @@ func TestClient_GetStatus_NotListening(t *testing.T) {
 
 	if _, err := client.GetStatus(ctx); err == nil {
 		t.Fatal("GetStatus() error = nil, want non-nil for a node that is not listening")
+	}
+}
+
+// selfSignedECDSAPEM generates a self-signed ECDSA cert/key pair, PEM-encoded,
+// for exercising DialPEM without touching the filesystem.
+func selfSignedECDSAPEM(t *testing.T) (certPEM, keyPEM string) {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ECDSA key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "operator-admin"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create self-signed cert: %v", err)
+	}
+
+	certBlock := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+
+	keyDER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal EC key: %v", err)
+	}
+	keyBlock := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+
+	return string(certBlock), string(keyBlock)
+}
+
+func TestDialPEM(t *testing.T) {
+	certPEM, keyPEM := selfSignedECDSAPEM(t)
+
+	client, err := DialPEM("127.0.0.1:0", certPEM, keyPEM, "")
+	if err != nil {
+		t.Fatalf("DialPEM() error = %v, want nil (grpc.NewClient is lazy)", err)
+	}
+	defer func() { _ = client.Close() }()
+}
+
+func TestDialPEM_MalformedKey(t *testing.T) {
+	certPEM, _ := selfSignedECDSAPEM(t)
+
+	_, err := DialPEM("127.0.0.1:0", certPEM, "not-a-valid-pem-key", "")
+	if err == nil {
+		t.Fatal("DialPEM() error = nil, want non-nil for a malformed key PEM")
 	}
 }

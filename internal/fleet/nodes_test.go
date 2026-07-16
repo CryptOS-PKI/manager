@@ -23,6 +23,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha512"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
@@ -45,6 +46,16 @@ type fakeConn struct {
 	revocations *cryptosv1.ListRevocationsResponse
 	err         error
 	closed      bool
+
+	// attestKey, when set, makes Attest sign the nonce for real (mirroring
+	// the node's CA-identity signer) instead of returning a zero response.
+	attestKey *ecdsa.PrivateKey
+	// attestBadSig makes Attest sign a digest that does NOT match the
+	// nonce it was given, so verifyAttestation must reject the signature.
+	attestBadSig bool
+	// gotNonce records the nonce the fake received, so a test can assert
+	// verifyAttestation actually sent one.
+	gotNonce []byte
 }
 
 func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {
@@ -75,11 +86,33 @@ func (f *fakeConn) ListRevocations(context.Context) (*cryptosv1.ListRevocationsR
 	return f.revocations, nil
 }
 
-func (f *fakeConn) Attest(context.Context, []byte) (*cryptosv1.AttestResponse, error) {
+func (f *fakeConn) Attest(_ context.Context, nonce []byte) (*cryptosv1.AttestResponse, error) {
+	f.gotNonce = nonce
 	if f.err != nil {
 		return nil, f.err
 	}
-	return &cryptosv1.AttestResponse{}, nil
+	if f.attestKey == nil {
+		return &cryptosv1.AttestResponse{}, nil
+	}
+	signed := nonce
+	if f.attestBadSig {
+		// Sign different bytes than the nonce so the signature is valid
+		// ASN.1 but does not verify against the nonce's digest.
+		signed = append([]byte("wrong-bytes-"), nonce...)
+	}
+	digest := sha512.Sum384(signed)
+	sig, err := ecdsa.SignASN1(rand.Reader, f.attestKey, digest[:])
+	if err != nil {
+		return nil, err
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&f.attestKey.PublicKey)
+	if err != nil {
+		return nil, err
+	}
+	return &cryptosv1.AttestResponse{
+		Signature:      sig,
+		IdentityPubDer: pubDER,
+	}, nil
 }
 
 func (f *fakeConn) GetSubordinateCSR(context.Context) (*cryptosv1.GetSubordinateCSRResponse, error) {

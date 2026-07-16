@@ -83,6 +83,9 @@ type Enrollment struct {
 	RequestedAt        string
 	RejectionReason    string
 	AdmittedNodeName   string
+	Kind               string // LINK|SUBORDINATE
+	PinnedKeySHA256    string // TOFU-pinned node identity (SPKI SHA-256 hex)
+	AttestationOK      bool
 }
 
 // Store is the manager's read access to the fleet inventory and its
@@ -100,4 +103,12 @@ type Store interface {
 	Audit() []AuditEvent
 	// Enrollments returns every enrollment request.
 	Enrollments() []Enrollment
+	// AddEnrollment appends a new enrollment request.
+	AddEnrollment(e Enrollment)
+	// UpdateEnrollment applies mutate to the enrollment with the given ID.
+	// It returns an error if no enrollment has that ID.
+	UpdateEnrollment(id string, mutate func(*Enrollment)) error
+	// Enrollment returns the enrollment request with the given ID, and
+	// whether it was found.
+	Enrollment(id string) (Enrollment, bool)
 }

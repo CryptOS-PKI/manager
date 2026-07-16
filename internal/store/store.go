@@ -86,6 +86,7 @@ type Enrollment struct {
 	Kind               string // LINK|SUBORDINATE
 	PinnedKeySHA256    string // TOFU-pinned node identity (SPKI SHA-256 hex)
 	AttestationOK      bool
+	Profile            string // SUBORDINATE: issuing profile name (store-internal; no proto field)
 }
 
 // Store is the manager's read access to the fleet inventory and its

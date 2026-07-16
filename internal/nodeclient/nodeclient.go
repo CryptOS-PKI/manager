@@ -155,6 +155,14 @@ func (c *Client) ApplyConfig(ctx context.Context, cfg *cryptosv1.MachineConfig) 
 	return c.node.ApplyConfig(ctx, &cryptosv1.ApplyConfigRequest{Config: cfg})
 }
 
+// SetManagement merges Fleet-Manager managed-state into the node's persisted
+// config: it marks the node as managed by this operator CN, adds the
+// operator CA as a trusted client CA, and optionally makes the node's own
+// operator surface read-only.
+func (c *Client) SetManagement(ctx context.Context, m *cryptosv1.Management) (*cryptosv1.SetManagementResponse, error) {
+	return c.node.SetManagement(ctx, &cryptosv1.SetManagementRequest{Management: m})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

@@ -1,7 +1,7 @@
 connectrpc.com/connect v1.20.0 h1:6TNDAB+WeNd2uolWNlYczB5E0KNNaVMNUEx8JEUsPmQ=
 connectrpc.com/connect v1.20.0/go.mod h1:A2ygJrukXwWy32vkCAAHNVguZrqZ+jeZ9rGRnGR4dN4=
-github.com/CryptOS-PKI/api v0.0.0-20260716131611-4a76861eee86 h1:7P8KbL4+vlv1F6BWu4/5hP5ObcqVSQ8zh4zYVEUL8DI=
-github.com/CryptOS-PKI/api v0.0.0-20260716131611-4a76861eee86/go.mod h1:tmeaYhNoUblqPYYNtTbGBGIUsZ7xLATgLdKq4S33rmE=
+github.com/CryptOS-PKI/api v0.0.0-20260716141902-8bd9295b7ffd h1:asCv5orA8IrwpaoO1hkjx/pN8sV4iHnR/VTtlgPQhIs=
+github.com/CryptOS-PKI/api v0.0.0-20260716141902-8bd9295b7ffd/go.mod h1:tmeaYhNoUblqPYYNtTbGBGIUsZ7xLATgLdKq4S33rmE=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=
 github.com/cespare/xxhash/v2 v2.3.0/go.mod h1:VGX0DQ3Q6kWi7AoAeZDth3/j3BFtOZR5XLFGgcrjCOs=
 github.com/go-logr/logr v1.4.3 h1:CjnDlHq8ikf6E492q6eKboGOC0T8CDaOvkHCIg8idEI=

@@ -56,6 +56,19 @@ type fakeConn struct {
 	// gotNonce records the nonce the fake received, so a test can assert
 	// verifyAttestation actually sent one.
 	gotNonce []byte
+
+	// gotManagement records the Management the fake received via
+	// SetManagement, so a test can assert what a LINK approval pushed.
+	gotManagement *cryptosv1.Management
+	// gotCSRProfile records the profile name SignSubordinateCSR was called
+	// with, so a test can assert the ferry used the enrollment's profile.
+	gotCSRProfile string
+	// signSubordinateResp, when set, is returned by SignSubordinateCSR
+	// instead of the zero-value response.
+	signSubordinateResp *cryptosv1.SignSubordinateCSRResponse
+	// calls records the ordered sequence of ferry-relevant method names
+	// invoked on this fake, so a test can assert call order.
+	calls *[]string
 }
 
 func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {
@@ -116,20 +129,27 @@ func (f *fakeConn) Attest(_ context.Context, nonce []byte) (*cryptosv1.AttestRes
 }
 
 func (f *fakeConn) GetSubordinateCSR(context.Context) (*cryptosv1.GetSubordinateCSRResponse, error) {
+	f.record("GetSubordinateCSR")
 	if f.err != nil {
 		return nil, f.err
 	}
 	return &cryptosv1.GetSubordinateCSRResponse{}, nil
 }
 
-func (f *fakeConn) SignSubordinateCSR(context.Context, []byte, string) (*cryptosv1.SignSubordinateCSRResponse, error) {
+func (f *fakeConn) SignSubordinateCSR(_ context.Context, _ []byte, profile string) (*cryptosv1.SignSubordinateCSRResponse, error) {
+	f.record("SignSubordinateCSR")
+	f.gotCSRProfile = profile
 	if f.err != nil {
 		return nil, f.err
+	}
+	if f.signSubordinateResp != nil {
+		return f.signSubordinateResp, nil
 	}
 	return &cryptosv1.SignSubordinateCSRResponse{}, nil
 }
 
 func (f *fakeConn) SubmitSubordinateCertificate(context.Context, [][]byte, string) (*cryptosv1.SubmitSubordinateCertificateResponse, error) {
+	f.record("SubmitSubordinateCertificate")
 	if f.err != nil {
 		return nil, f.err
 	}
@@ -141,6 +161,22 @@ func (f *fakeConn) ApplyConfig(context.Context, *cryptosv1.MachineConfig) (*cryp
 		return nil, f.err
 	}
 	return &cryptosv1.ApplyConfigResponse{}, nil
+}
+
+func (f *fakeConn) SetManagement(_ context.Context, m *cryptosv1.Management) (*cryptosv1.SetManagementResponse, error) {
+	f.gotManagement = m
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.SetManagementResponse{}, nil
+}
+
+// record appends name to the shared call log, if this fake was given one.
+// Used by the SUBORDINATE ferry tests to assert child/parent call order.
+func (f *fakeConn) record(name string) {
+	if f.calls != nil {
+		*f.calls = append(*f.calls, name)
+	}
 }
 
 func (f *fakeConn) Close() error {

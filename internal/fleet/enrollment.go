@@ -73,6 +73,9 @@ func (s *Service) CreateEnrollment(ctx context.Context, req *connect.Request[fle
 // material, attests it, and stores a PENDING LINK enrollment pinned to the
 // attested identity's fingerprint.
 func (s *Service) createLinkEnrollment(ctx context.Context, msg *fleetv1.CreateEnrollmentRequest) (*connect.Response[fleetv1.CreateEnrollmentResponse], error) {
+	if s.dialPEM == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fleet: enrollment not configured (no PEM dial seam)"))
+	}
 	conn, err := s.dialPEM(msg.GetNodeEndpoint(), msg.GetAdminCertPem(), msg.GetAdminKeyPem(), msg.GetCaPem())
 	if err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, fmt.Errorf("fleet: dial node: %w", err))
@@ -179,6 +182,9 @@ func (s *Service) approveLinkEnrollment(ctx context.Context, id authz.Identity, 
 	if msg.GetNodeEndpoint() == "" || msg.GetAdminKeyPem() == "" {
 		return connect.NewError(connect.CodeInvalidArgument, errors.New("fleet: LINK approval must re-supply the node connection material"))
 	}
+	if s.dialPEM == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("fleet: enrollment not configured (no PEM dial seam)"))
+	}
 
 	conn, err := s.dialPEM(msg.GetNodeEndpoint(), msg.GetAdminCertPem(), msg.GetAdminKeyPem(), msg.GetCaPem())
 	if err != nil {
@@ -242,12 +248,13 @@ func (s *Service) approveSubordinateEnrollment(ctx context.Context, id authz.Ide
 	return nil
 }
 
-// resolveParentByCN dials each inventory node and matches its identity
-// chain's leaf CN against cn, returning the first match. The parent of a
-// SUBORDINATE enrollment is named by CN rather than by inventory name
-// because the operator identifies it the same way the node topology already
-// displays it (leafCNs' issuer field); the inventory has no separate
-// CN-indexed lookup.
+// resolveParentByCN dials each inventory node and matches the node's own
+// identity leaf Subject CN against cn, returning the first match. The parent of
+// a SUBORDINATE enrollment is named by CN rather than by inventory name because
+// the operator identifies it the same way the topology labels a CA (its subject
+// CN); the inventory has no separate CN-indexed lookup. A node that fails to
+// dial or identify is skipped, so a transient failure on the real parent
+// surfaces as "no match" — approval is a retriable no-op until the ferry runs.
 func (s *Service) resolveParentByCN(ctx context.Context, cn string) (store.Node, error) {
 	for _, n := range s.store.Nodes() {
 		conn, err := s.dial(n)

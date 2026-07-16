@@ -75,6 +75,41 @@ func (f *fakeConn) ListRevocations(context.Context) (*cryptosv1.ListRevocationsR
 	return f.revocations, nil
 }
 
+func (f *fakeConn) Attest(context.Context, []byte) (*cryptosv1.AttestResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.AttestResponse{}, nil
+}
+
+func (f *fakeConn) GetSubordinateCSR(context.Context) (*cryptosv1.GetSubordinateCSRResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.GetSubordinateCSRResponse{}, nil
+}
+
+func (f *fakeConn) SignSubordinateCSR(context.Context, []byte, string) (*cryptosv1.SignSubordinateCSRResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.SignSubordinateCSRResponse{}, nil
+}
+
+func (f *fakeConn) SubmitSubordinateCertificate(context.Context, [][]byte, string) (*cryptosv1.SubmitSubordinateCertificateResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.SubmitSubordinateCertificateResponse{}, nil
+}
+
+func (f *fakeConn) ApplyConfig(context.Context, *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &cryptosv1.ApplyConfigResponse{}, nil
+}
+
 func (f *fakeConn) Close() error {
 	f.closed = true
 	return nil

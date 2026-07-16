@@ -89,6 +89,43 @@ func (c *Client) ListRevocations(ctx context.Context) (*cryptosv1.ListRevocation
 	return c.node.ListRevocations(ctx, &cryptosv1.ListRevocationsRequest{})
 }
 
+// Attest asks the node to sign nonce with its identity key, proving
+// possession of the private key behind its current certificate.
+func (c *Client) Attest(ctx context.Context, nonce []byte) (*cryptosv1.AttestResponse, error) {
+	return c.node.Attest(ctx, &cryptosv1.AttestRequest{Nonce: nonce})
+}
+
+// GetSubordinateCSR returns the node's own DER-encoded PKCS#10 CSR, generated
+// when it is provisioning as a subordinate awaiting a parent's signature.
+func (c *Client) GetSubordinateCSR(ctx context.Context) (*cryptosv1.GetSubordinateCSRResponse, error) {
+	return c.node.GetSubordinateCSR(ctx, &cryptosv1.GetSubordinateCSRRequest{})
+}
+
+// SignSubordinateCSR asks a parent node to sign a child's DER CSR under the
+// named certificate profile (which sets CA:TRUE + pathLen), returning the
+// signed cert and full issuing chain.
+func (c *Client) SignSubordinateCSR(ctx context.Context, csrDER []byte, profile string) (*cryptosv1.SignSubordinateCSRResponse, error) {
+	return c.node.SignSubordinateCSR(ctx, &cryptosv1.SignSubordinateCSRRequest{
+		CsrDer:      csrDER,
+		ProfileName: profile,
+	})
+}
+
+// SubmitSubordinateCertificate delivers a parent-signed chain (leaf-first:
+// this node's cert, parent, ..., root) back to the subordinate node so it
+// can adopt its new identity.
+func (c *Client) SubmitSubordinateCertificate(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.SubmitSubordinateCertificateResponse, error) {
+	return c.node.SubmitSubordinateCertificate(ctx, &cryptosv1.SubmitSubordinateCertificateRequest{
+		ChainDer: chainDER,
+		ChainPem: chainPEM,
+	})
+}
+
+// ApplyConfig pushes a machine configuration to the node.
+func (c *Client) ApplyConfig(ctx context.Context, cfg *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error) {
+	return c.node.ApplyConfig(ctx, &cryptosv1.ApplyConfigRequest{Config: cfg})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

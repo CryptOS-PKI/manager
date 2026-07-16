@@ -38,6 +38,11 @@ type NodeConn interface {
 	GetIdentity(ctx context.Context) (*cryptosv1.GetIdentityResponse, error)
 	ListIssued(ctx context.Context) (*cryptosv1.ListIssuedResponse, error)
 	ListRevocations(ctx context.Context) (*cryptosv1.ListRevocationsResponse, error)
+	Attest(ctx context.Context, nonce []byte) (*cryptosv1.AttestResponse, error)
+	GetSubordinateCSR(ctx context.Context) (*cryptosv1.GetSubordinateCSRResponse, error)
+	SignSubordinateCSR(ctx context.Context, csrDER []byte, profile string) (*cryptosv1.SignSubordinateCSRResponse, error)
+	SubmitSubordinateCertificate(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.SubmitSubordinateCertificateResponse, error)
+	ApplyConfig(ctx context.Context, cfg *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error)
 	Close() error
 }
 

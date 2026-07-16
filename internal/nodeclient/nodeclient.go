@@ -69,6 +69,35 @@ func Dial(node store.Node) (*Client, error) {
 	}, nil
 }
 
+// DialPEM dials a node presenting the given admin client cert/key (PEM), for
+// operator-initiated enrollment where the material is supplied at request
+// time rather than from the node inventory. Server verification is relaxed
+// (the node enforces client-auth); caPEM is accepted for future server
+// pinning.
+func DialPEM(endpoint, certPEM, keyPEM, caPEM string) (*Client, error) {
+	adminCert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	if err != nil {
+		return nil, fmt.Errorf("nodeclient: parse admin cert/key PEM: %w", err)
+	}
+
+	_ = caPEM // reserved for future server-cert pinning (Dial also relaxes server verify today)
+
+	tlsCfg := &tls.Config{
+		Certificates:       []tls.Certificate{adminCert},
+		InsecureSkipVerify: true, //nolint:gosec // node's server cert is ephemeral self-signed; client-cert auth is the trust boundary here.
+	}
+
+	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	if err != nil {
+		return nil, fmt.Errorf("nodeclient: dial %s: %w", endpoint, err)
+	}
+
+	return &Client{
+		conn: conn,
+		node: cryptosv1.NewNodeServiceClient(conn),
+	}, nil
+}
+
 // GetStatus returns the node's current status.
 func (c *Client) GetStatus(ctx context.Context) (*cryptosv1.GetStatusResponse, error) {
 	return c.node.GetStatus(ctx, &cryptosv1.GetStatusRequest{})

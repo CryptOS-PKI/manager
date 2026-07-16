@@ -38,6 +38,12 @@ type NodeConn interface {
 	GetIdentity(ctx context.Context) (*cryptosv1.GetIdentityResponse, error)
 	ListIssued(ctx context.Context) (*cryptosv1.ListIssuedResponse, error)
 	ListRevocations(ctx context.Context) (*cryptosv1.ListRevocationsResponse, error)
+	Attest(ctx context.Context, nonce []byte) (*cryptosv1.AttestResponse, error)
+	GetSubordinateCSR(ctx context.Context) (*cryptosv1.GetSubordinateCSRResponse, error)
+	SignSubordinateCSR(ctx context.Context, csrDER []byte, profile string) (*cryptosv1.SignSubordinateCSRResponse, error)
+	SubmitSubordinateCertificate(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.SubmitSubordinateCertificateResponse, error)
+	ApplyConfig(ctx context.Context, cfg *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error)
+	SetManagement(ctx context.Context, m *cryptosv1.Management) (*cryptosv1.SetManagementResponse, error)
 	Close() error
 }
 
@@ -46,12 +52,25 @@ type NodeConn interface {
 type Service struct {
 	store store.Store
 	dial  func(store.Node) (NodeConn, error)
+
+	dialPEM       func(endpoint, certPEM, keyPEM, caPEM string) (NodeConn, error)
+	operatorCAPEM string
 }
 
 // New builds a Service backed by st, dialing nodes with dial. Callers in
 // production pass an adapter over nodeclient.Dial; tests pass a fake.
 func New(st store.Store, dial func(store.Node) (NodeConn, error)) *Service {
 	return &Service{store: st, dial: dial}
+}
+
+// WithEnrollment supplies the PEM dial seam (for LINK, which reaches a
+// not-yet-inventoried node) and the operator CA PEM (stamped into a linked
+// node's managed-state trust anchor). Returns s for chaining.
+func (s *Service) WithEnrollment(dialPEM func(endpoint, certPEM, keyPEM, caPEM string) (NodeConn, error), operatorCAPEM string) *Service {
+	s.dialPEM = dialPEM
+	s.operatorCAPEM = operatorCAPEM
+
+	return s
 }
 
 var _ fleetv1connect.FleetServiceHandler = (*Service)(nil)

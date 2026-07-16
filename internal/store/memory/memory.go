@@ -21,6 +21,7 @@ limitations under the License.
 */
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/CryptOS-PKI/manager/internal/store"
@@ -126,4 +127,43 @@ func (s *Store) Enrollments() []store.Enrollment {
 	copy(out, s.enrollments)
 
 	return out
+}
+
+// AddEnrollment appends a new enrollment request.
+func (s *Store) AddEnrollment(e store.Enrollment) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.enrollments = append(s.enrollments, e)
+}
+
+// Enrollment returns the enrollment request with the given ID, and whether
+// it was found.
+func (s *Store) Enrollment(id string) (store.Enrollment, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, e := range s.enrollments {
+		if e.ID == id {
+			return e, true
+		}
+	}
+
+	return store.Enrollment{}, false
+}
+
+// UpdateEnrollment applies mutate to the enrollment with the given ID. It
+// returns an error if no enrollment has that ID.
+func (s *Store) UpdateEnrollment(id string, mutate func(*store.Enrollment)) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.enrollments {
+		if s.enrollments[i].ID == id {
+			mutate(&s.enrollments[i])
+			return nil
+		}
+	}
+
+	return fmt.Errorf("memory: enrollment %q not found", id)
 }

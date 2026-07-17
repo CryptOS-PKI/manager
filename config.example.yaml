@@ -14,6 +14,11 @@
 listen: "127.0.0.1:8080"
 corsOrigins: ["http://localhost:5173", "http://127.0.0.1:5173"]
 authBypass: true
+# database_url selects durable Postgres state. Leave it unset (or empty) to use
+# the in-memory store seeded from the built-in catalog, which is the default for
+# offline dev. When set, the manager applies the schema, seeds the catalog into
+# an empty database on first run, and persists enrollments and the audit chain.
+# database_url: "postgres://manager:secret@localhost:5432/manager"
 nodes:
   - name: pki-root
     endpoint: "pki-root.acme.com:4443"

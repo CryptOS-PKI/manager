@@ -22,6 +22,7 @@ limitations under the License.
 */
 
 import (
+	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"flag"
@@ -37,6 +38,7 @@ import (
 	"github.com/CryptOS-PKI/manager/internal/nodeclient"
 	"github.com/CryptOS-PKI/manager/internal/store"
 	"github.com/CryptOS-PKI/manager/internal/store/memory"
+	"github.com/CryptOS-PKI/manager/internal/store/postgres"
 	"github.com/CryptOS-PKI/manager/internal/store/seed"
 	"github.com/CryptOS-PKI/manager/internal/webui"
 	"golang.org/x/net/http2"
@@ -64,7 +66,24 @@ func main() {
 		}
 	}
 	profiles, adapters, audit, enrollments := seed.Catalog()
-	st := memory.NewWithCatalog(nodes, profiles, adapters, audit, enrollments)
+
+	var st store.Store
+	if cfg.DatabaseURL == "" {
+		st = memory.NewWithCatalog(nodes, profiles, adapters, audit, enrollments)
+		log.Printf("manager: no database_url configured, using in-memory store")
+	} else {
+		ctx := context.Background()
+		pg, err := postgres.New(ctx, cfg.DatabaseURL)
+		if err != nil {
+			log.Fatalf("manager: connect postgres: %v", err)
+		}
+		defer pg.Close()
+		if err := pg.SeedIfEmpty(ctx, nodes, profiles, adapters, audit, enrollments); err != nil {
+			log.Fatalf("manager: seed postgres: %v", err)
+		}
+		st = pg
+		log.Printf("manager: using postgres store")
+	}
 
 	dial := func(n store.Node) (fleet.NodeConn, error) {
 		c, err := nodeclient.Dial(n)

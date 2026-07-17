@@ -10,6 +10,12 @@ require (
 require connectrpc.com/connect v1.20.0
 
 require (
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/pgx/v5 v5.10.0 // indirect
+)
+
+require (
 	github.com/CryptOS-PKI/api v0.0.0-20260716141902-8bd9295b7ffd
 	golang.org/x/net v0.51.0
 	golang.org/x/sys v0.42.0 // indirect

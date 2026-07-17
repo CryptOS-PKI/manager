@@ -30,6 +30,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 
 	fleetv1connect "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1/fleetv1connect"
 	"github.com/CryptOS-PKI/manager/internal/authz"
@@ -127,7 +128,11 @@ func main() {
 	if cfg.AuthBypass {
 		authMW = authz.BypassMiddleware
 	}
-	rootHandler := withCORS(cfg.CORSOrigins, authMW(mux))
+	// withRecover is the outermost layer so a panic on any path -- including the
+	// Postgres store panicking on a query error -- is logged and answered with a
+	// 500 instead of a bare aborted stream. The real fix is an error-returning
+	// store.Store interface; see #40.
+	rootHandler := withRecover(withCORS(cfg.CORSOrigins, authMW(mux)))
 
 	log.Printf("manager: %d node(s) configured, catalog seeded (%d profiles, %d adapters, %d audit events, %d enrollments)",
 		len(nodes), len(profiles), len(adapters), len(audit), len(enrollments))
@@ -176,6 +181,24 @@ func buildTLSConfig(cfg config.Config) (*tls.Config, error) {
 		ClientCAs:    pool,
 		MinVersion:   tls.VersionTLS12,
 	}, nil
+}
+
+// withRecover wraps next so a panic in any downstream handler is caught,
+// logged with its value and stack, and turned into a 500 response. It sits at
+// the top of the chain so every path is covered: the Postgres store's methods
+// satisfy an error-free store.Store interface and so panic on query errors,
+// which would otherwise surface to the client as a bare aborted stream. The
+// proper fix is an error-returning store.Store interface; see #40.
+func withRecover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if v := recover(); v != nil {
+				log.Printf("manager: recovered panic serving %s %s: %v\n%s", r.Method, r.URL.Path, v, debug.Stack())
+				http.Error(w, "internal server error", http.StatusInternalServerError)
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // withCORS wraps next with a CORS handler that allows the given origins to

@@ -170,6 +170,16 @@ func (s *Service) ApproveEnrollment(ctx context.Context, req *connect.Request[fl
 	if !ok {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: enrollment %q vanished after approval", e.ID))
 	}
+
+	s.store.AddAuditEvent(store.AuditEvent{
+		ID:         newAuditID(),
+		At:         time.Now().UTC().Format(time.RFC3339),
+		Kind:       "enroll-approved",
+		Summary:    fmt.Sprintf("Approved enrollment %s (%s)", final.ProposedName, final.Kind),
+		TargetKind: "enrollment",
+		TargetPath: "/enrollments/" + final.ID,
+	})
+
 	return connect.NewResponse(&fleetv1.ApproveEnrollmentResponse{Enrollment: enrollmentToProto(final)}), nil
 }
 
@@ -338,6 +348,16 @@ func (s *Service) RejectEnrollment(ctx context.Context, req *connect.Request[fle
 	if !ok {
 		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: enrollment %q vanished after rejection", e.ID))
 	}
+
+	s.store.AddAuditEvent(store.AuditEvent{
+		ID:         newAuditID(),
+		At:         time.Now().UTC().Format(time.RFC3339),
+		Kind:       "enroll-rejected",
+		Summary:    fmt.Sprintf("Rejected enrollment %s (%s)", final.ProposedName, final.Kind),
+		TargetKind: "enrollment",
+		TargetPath: "/enrollments/" + final.ID,
+	})
+
 	return connect.NewResponse(&fleetv1.RejectEnrollmentResponse{Enrollment: enrollmentToProto(final)}), nil
 }
 
@@ -352,4 +372,14 @@ func newEnrollmentID() string {
 		panic(fmt.Sprintf("fleet: newEnrollmentID: %v", err))
 	}
 	return "enr-" + hex.EncodeToString(b)
+}
+
+// newAuditID generates a unique audit-event identifier: an "aud-" prefix over
+// 16 random bytes of hex. Same rationale as newEnrollmentID.
+func newAuditID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		panic(fmt.Sprintf("fleet: newAuditID: %v", err))
+	}
+	return "aud-" + hex.EncodeToString(b)
 }

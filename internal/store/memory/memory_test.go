@@ -233,3 +233,28 @@ func TestStore_Enrollments_ReturnsCopy(t *testing.T) {
 		t.Errorf("Enrollment(\"enr-0001\").Status = %q after mutating Enrollments() slice, want PENDING", again.Status)
 	}
 }
+
+func TestStore_AddAuditEvent_ChainsHashes(t *testing.T) {
+	s := New(testNodes())
+
+	first := s.AddAuditEvent(store.AuditEvent{ID: "a1", At: "t1", Kind: "issued", Summary: "one"})
+	second := s.AddAuditEvent(store.AuditEvent{ID: "a2", At: "t2", Kind: "revoked", Summary: "two"})
+
+	if first.Hash == "" || second.Hash == "" {
+		t.Fatal("hashes must be non-empty")
+	}
+	if first.PrevHash != "" {
+		t.Errorf("first PrevHash = %q, want empty", first.PrevHash)
+	}
+	if second.PrevHash != first.Hash {
+		t.Errorf("second PrevHash = %q, want first Hash %q", second.PrevHash, first.Hash)
+	}
+	if first.Hash == second.Hash {
+		t.Error("distinct events must have distinct hashes")
+	}
+
+	log := s.Audit()
+	if len(log) != 2 || log[0].ID != "a1" || log[1].ID != "a2" {
+		t.Fatalf("Audit() = %+v, want ordered a1,a2", log)
+	}
+}

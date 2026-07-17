@@ -63,6 +63,37 @@ func TestLoad_RealExampleConfig(t *testing.T) {
 	}
 }
 
+func TestLoad_DatabaseURLParses(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	body := `
+listen: "127.0.0.1:8080"
+authBypass: true
+database_url: "postgres://user:pw@db:5432/manager"
+`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DatabaseURL != "postgres://user:pw@db:5432/manager" {
+		t.Errorf("DatabaseURL = %q, want postgres://user:pw@db:5432/manager", cfg.DatabaseURL)
+	}
+}
+
+func TestLoad_DatabaseURLDefaultsEmpty(t *testing.T) {
+	cfg, err := Load("../../config.example.yaml")
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.DatabaseURL != "" {
+		t.Errorf("DatabaseURL = %q, want empty (in-memory default)", cfg.DatabaseURL)
+	}
+}
+
 func TestLoad_MissingFile(t *testing.T) {
 	_, err := Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {

@@ -47,13 +47,35 @@ helm install fleet oci://ghcr.io/cryptos-pki/charts/fleet-manager --version X.Y.
   --set-json 'nodes=[{"name":"pki-root","endpoint":"pki-root.example:443","role":"root","adminCertPath":"...","adminKeyPath":"...","caCertPath":"..."}]'
 ```
 
+## 🗄️ State backend
+
+The manager keeps its state either in memory or in Postgres, chosen by the `database_url` config key:
+
+- **Unset (default).** An in-memory store seeded from the built-in catalog. Nothing persists across a restart. This is the offline-dev and test default.
+- **Set to a Postgres DSN.** The manager applies its schema (a small idempotent migrator runs on every startup), seeds the catalog into an empty database on first run, and persists enrollments and the hash-chained audit log. Restarts keep pending enrollments and the audit trail; the seed is a no-op once any table has rows, so live data is never clobbered.
+
+```yaml
+# config.yaml
+database_url: "postgres://manager:secret@db:5432/manager"
+```
+
+The persistence layer is hand-rolled: raw SQL over [`pgx`](https://github.com/jackc/pgx), a hand-written schema, and a tiny version-tracked migrator — no ORM.
+
+The Postgres integration tests are gated on the `MANAGER_TEST_DATABASE_URL` env var and **skip** when it is unset, so `task ci` stays green without a database. To run them against a throwaway Postgres:
+
+```sh
+docker run -d --rm -e POSTGRES_PASSWORD=test -p 5433:5432 postgres:18-alpine
+MANAGER_TEST_DATABASE_URL=postgres://postgres:test@localhost:5433/postgres \
+  go test ./internal/store/... -v
+```
+
 ## 📦 Releasing
 
 Nothing tags automatically. On push to `main`, release-drafter categorises the merged conventional-commit PRs into the draft release notes, and [`Bugs5382/changelog-updater-action`](https://github.com/Bugs5382/changelog-updater-action) writes those notes into `CHANGELOG.md` (committed back to `main` as a `[skip ci]` pre-release commit). The maintainer then publishes the GitHub Release by hand, which creates the `vX.Y.Z` tag. That tag triggers `job-release-image.yaml`, which builds and pushes the container image (`ghcr.io/cryptos-pki/manager`) via BuildKit and packages+pushes the Helm chart (`oci://ghcr.io/cryptos-pki/charts/fleet-manager`). The node ISO ships from [`cryptos`](https://github.com/CryptOS-PKI/cryptos). The image and chart assume no particular deploy environment — adopters bring their own registry, trust material, and orchestrator. (The repo's own release/governance tooling — release-drafter, `Bugs5382/changelog-updater-action`, golic — is the maintainer's; adopters don't need it.)
 
 ## 🚦 Status
 
-**Alpha.** Read-only fleet integration and mTLS client-cert auth are implemented; write paths and the Postgres inventory adapter are in progress.
+**Alpha.** Read-only fleet integration, mTLS client-cert auth, and durable Postgres state (enrollments and the hash-chained audit log) are implemented; the broader inventory write paths are in progress.
 
 ## 🧭 Companion repos
 

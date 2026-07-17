@@ -42,6 +42,11 @@ type Config struct {
 	TLSKey         string `yaml:"tlsKey"`
 	OperatorCAPath string `yaml:"operatorCAPath"`
 
+	// DatabaseURL is the Postgres connection DSN for durable state. Empty
+	// selects the in-memory store, seeded from the built-in catalog, which
+	// stays the default for offline dev and tests.
+	DatabaseURL string `yaml:"database_url"`
+
 	Nodes []NodeCfg `yaml:"nodes"`
 }
 

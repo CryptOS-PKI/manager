@@ -27,6 +27,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -79,6 +81,35 @@ func writeSelfSigned(t *testing.T, dir string) (certPath, keyPath string) {
 		t.Fatal(err)
 	}
 	return certPath, keyPath
+}
+
+func TestWithRecover_PanicBecomes500(t *testing.T) {
+	h := withRecover(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("store: query failed")
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/cryptos.fleet.v1.FleetService/ListNodes", nil)
+
+	// The recover must contain the panic so the request does not crash the server.
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusInternalServerError)
+	}
+}
+
+func TestWithRecover_PassesThroughWhenNoPanic(t *testing.T) {
+	h := withRecover(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusTeapot)
+	}))
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+
+	if rec.Code != http.StatusTeapot {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusTeapot)
+	}
 }
 
 func TestBuildTLSConfig_RequiresClientCert(t *testing.T) {

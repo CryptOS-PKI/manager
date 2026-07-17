@@ -450,6 +450,75 @@ func TestRejectEnrollment_Operator(t *testing.T) {
 	}
 }
 
+func TestRejectEnrollment_AppendsAuditEvent(t *testing.T) {
+	st := memory.New(nil)
+	st.AddEnrollment(store.Enrollment{ID: "enr-1", Kind: "LINK", Status: "PENDING", ProposedName: "node-1"})
+	svc := New(st, dialFor(nil)).WithEnrollment(dialPEMFakeFor(&fakeConn{}), testOperatorCAPEM)
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	if _, err := svc.RejectEnrollment(ctx, connect.NewRequest(&fleetv1.RejectEnrollmentRequest{Id: "enr-1", Reason: "bad key"})); err != nil {
+		t.Fatalf("RejectEnrollment error = %v, want nil", err)
+	}
+
+	audit := st.Audit()
+	if len(audit) != before+1 {
+		t.Fatalf("audit len = %d, want %d (one new event)", len(audit), before+1)
+	}
+	last := audit[len(audit)-1]
+	if last.Kind != "enroll-rejected" {
+		t.Errorf("Kind = %q, want enroll-rejected", last.Kind)
+	}
+	if last.Hash == "" {
+		t.Error("audit event Hash is empty, want a chain hash")
+	}
+}
+
+func TestApproveEnrollment_Link_AppendsAuditEvent(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey: %v", err)
+	}
+	createConn := &fakeConn{attestKey: key}
+
+	st := memory.New(nil)
+	svc := New(st, dialFor(nil)).WithEnrollment(dialPEMFakeFor(createConn), testOperatorCAPEM)
+
+	createCtx := operatorCtx("op@acme.example", authz.LevelOperator)
+	createResp, err := svc.CreateEnrollment(createCtx, connect.NewRequest(&fleetv1.CreateEnrollmentRequest{
+		Kind:         "LINK",
+		NodeEndpoint: "node.acme.com:4443",
+		AdminCertPem: "cert",
+		AdminKeyPem:  "key",
+		CaPem:        "ca",
+	}))
+	if err != nil {
+		t.Fatalf("CreateEnrollment(LINK) error = %v, want nil", err)
+	}
+	id := createResp.Msg.GetEnrollment().GetId()
+
+	svc.dialPEM = dialPEMFakeFor(&fakeConn{attestKey: key})
+	before := len(st.Audit())
+	adminCtx := operatorCtx("admin@acme.example", authz.LevelAdmin)
+	if _, err := svc.ApproveEnrollment(adminCtx, connect.NewRequest(&fleetv1.ApproveEnrollmentRequest{
+		Id:           id,
+		NodeEndpoint: "node.acme.com:4443",
+		AdminCertPem: "cert",
+		AdminKeyPem:  "key",
+		CaPem:        "ca",
+	})); err != nil {
+		t.Fatalf("ApproveEnrollment(LINK) error = %v, want nil", err)
+	}
+
+	audit := st.Audit()
+	if len(audit) != before+1 {
+		t.Fatalf("audit len = %d, want %d (one new event)", len(audit), before+1)
+	}
+	if audit[len(audit)-1].Kind != "enroll-approved" {
+		t.Errorf("Kind = %q, want enroll-approved", audit[len(audit)-1].Kind)
+	}
+}
+
 func TestRejectEnrollment_NotPending_FailedPrecondition(t *testing.T) {
 	st := memory.New(nil)
 	st.AddEnrollment(store.Enrollment{ID: "enr-1", Kind: "LINK", Status: "REJECTED"})

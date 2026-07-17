@@ -118,6 +118,24 @@ func (s *Store) Audit() []store.AuditEvent {
 	return out
 }
 
+// AddAuditEvent appends e to the hash-chained audit log: PrevHash is the last
+// event's Hash (empty for the first), Hash is computed over the chain, and the
+// stored event is returned.
+func (s *Store) AddAuditEvent(e store.AuditEvent) store.AuditEvent {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	var prev string
+	if n := len(s.audit); n > 0 {
+		prev = s.audit[n-1].Hash
+	}
+	e.PrevHash = prev
+	e.Hash = store.HashEvent(prev, e)
+	s.audit = append(s.audit, e)
+
+	return e
+}
+
 // Enrollments returns every enrollment request.
 func (s *Store) Enrollments() []store.Enrollment {
 	s.mu.RLock()

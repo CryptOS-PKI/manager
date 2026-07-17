@@ -20,6 +20,8 @@ limitations under the License.
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/CryptOS-PKI/manager/internal/store"
@@ -146,6 +148,56 @@ func TestAuditChain(t *testing.T) {
 	}
 	if log[1].PrevHash != log[0].Hash {
 		t.Fatalf("persisted chain broken: log[1].PrevHash=%q log[0].Hash=%q", log[1].PrevHash, log[0].Hash)
+	}
+}
+
+// TestAuditChainConcurrentAppends drives many concurrent AddAuditEvent calls
+// against one store and asserts the persisted chain stays linear: every event
+// links to its predecessor, no prev_hash is reused, and every append lands.
+// Without the advisory lock in AddAuditEvent two appends could read the same
+// prev_hash and fork the chain, which this test would catch.
+func TestAuditChainConcurrentAppends(t *testing.T) {
+	s := testStore(t)
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			s.AddAuditEvent(store.AuditEvent{
+				ID:      fmt.Sprintf("evt-%d", i),
+				At:      "t",
+				Kind:    "issued",
+				Summary: fmt.Sprintf("append %d", i),
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	log := s.Audit()
+	if len(log) != n {
+		t.Fatalf("Audit() len = %d, want %d", len(log), n)
+	}
+
+	seenPrev := make(map[string]struct{}, n)
+	for i, e := range log {
+		if e.Hash == "" {
+			t.Fatalf("event %d has empty hash", i)
+		}
+		if i == 0 {
+			if e.PrevHash != "" {
+				t.Fatalf("first event PrevHash = %q, want empty", e.PrevHash)
+			}
+		} else {
+			if e.PrevHash != log[i-1].Hash {
+				t.Fatalf("chain fork at %d: PrevHash=%q, want prior Hash %q", i, e.PrevHash, log[i-1].Hash)
+			}
+		}
+		if _, dup := seenPrev[e.PrevHash]; dup && e.PrevHash != "" {
+			t.Fatalf("duplicate PrevHash %q at event %d: chain forked", e.PrevHash, i)
+		}
+		seenPrev[e.PrevHash] = struct{}{}
 	}
 }
 

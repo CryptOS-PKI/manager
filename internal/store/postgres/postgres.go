@@ -34,6 +34,12 @@ type Store struct {
 	pool *pgxpool.Pool
 }
 
+// auditChainLockKey is the fixed key for the transaction-scoped advisory lock
+// that serializes audit-chain appends (see AddAuditEvent). The value is
+// arbitrary but reserved for this one purpose so that no two appends read the
+// same prev_hash concurrently and fork the chain.
+const auditChainLockKey int64 = 0x6175646974636861 // "auditcha"
+
 // compile-time proof that Store satisfies the store.Store interface.
 var _ store.Store = (*Store)(nil)
 
@@ -247,7 +253,10 @@ func (s *Store) UpdateEnrollment(id string, mutate func(*store.Enrollment)) erro
 // AddAuditEvent appends e to the hash-chained audit log: it reads the most
 // recent event's hash as prev_hash (empty for the first event), computes the
 // new hash, persists the row, and returns the stored event. The read and insert
-// run in one transaction so concurrent appends cannot fork the chain.
+// run in one transaction that first takes a transaction-scoped advisory lock on
+// the audit chain, so concurrent appends serialize on that lock instead of both
+// reading the same prev_hash and forking the chain; the lock releases
+// automatically on commit or rollback.
 func (s *Store) AddAuditEvent(e store.AuditEvent) store.AuditEvent {
 	ctx := bg()
 	tx, err := s.pool.Begin(ctx)
@@ -255,6 +264,10 @@ func (s *Store) AddAuditEvent(e store.AuditEvent) store.AuditEvent {
 		panic(fmt.Sprintf("postgres: begin audit append: %v", err))
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, auditChainLockKey); err != nil {
+		panic(fmt.Sprintf("postgres: lock audit chain: %v", err))
+	}
 
 	var prev string
 	err = tx.QueryRow(ctx, `SELECT hash FROM audit_events ORDER BY seq DESC LIMIT 1`).Scan(&prev)

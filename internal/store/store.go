@@ -19,6 +19,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+import (
+	"crypto/sha256"
+	"encoding/hex"
+)
+
 // Node is one fleet member as seen by the store: its dial address, role,
 // and the file paths for its admin mTLS client cert/key and pinned CA.
 type Node struct {
@@ -57,7 +62,8 @@ type Adapter struct {
 }
 
 // AuditEvent is one manager-observed audit record. It mirrors
-// cryptos.fleet.v1.AuditEvent.
+// cryptos.fleet.v1.AuditEvent. PrevHash and Hash back a tamper-evident hash
+// chain over the append-ordered log (see HashEvent).
 type AuditEvent struct {
 	ID         string
 	At         string
@@ -65,6 +71,8 @@ type AuditEvent struct {
 	Summary    string
 	TargetKind string
 	TargetPath string
+	PrevHash   string
+	Hash       string
 }
 
 // Enrollment is a node's request to join the fleet under a parent CA,
@@ -100,8 +108,12 @@ type Store interface {
 	Profiles() []Profile
 	// Adapters returns every enrollment protocol adapter.
 	Adapters() []Adapter
-	// Audit returns every audit event.
+	// Audit returns every audit event, in append order.
 	Audit() []AuditEvent
+	// AddAuditEvent appends e to the hash chain: it sets PrevHash to the
+	// previous event's Hash (empty for the first), computes Hash, persists
+	// the event, and returns the stored copy.
+	AddAuditEvent(e AuditEvent) AuditEvent
 	// Enrollments returns every enrollment request.
 	Enrollments() []Enrollment
 	// AddEnrollment appends a new enrollment request.
@@ -112,4 +124,14 @@ type Store interface {
 	// Enrollment returns the enrollment request with the given ID, and
 	// whether it was found.
 	Enrollment(id string) (Enrollment, bool)
+}
+
+// HashEvent computes the chain hash for an audit event: the SHA-256, in hex, of
+// the previous event's hash and the event's immutable fields. Chaining prevHash
+// into each hash makes the log tamper-evident: altering any past event breaks
+// every hash after it. The identity/derived fields (PrevHash, Hash) are not
+// themselves hashed.
+func HashEvent(prevHash string, e AuditEvent) string {
+	h := sha256.Sum256([]byte(prevHash + "\n" + e.ID + e.At + e.Kind + e.Summary + e.TargetKind + e.TargetPath))
+	return hex.EncodeToString(h[:])
 }

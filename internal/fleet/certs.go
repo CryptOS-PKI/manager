@@ -21,6 +21,7 @@ limitations under the License.
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -30,6 +31,7 @@ import (
 
 	connect "connectrpc.com/connect"
 	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
+	"github.com/CryptOS-PKI/manager/internal/authz"
 	"github.com/CryptOS-PKI/manager/internal/store"
 )
 
@@ -98,6 +100,59 @@ func (s *Service) ListCertificates(ctx context.Context, req *connect.Request[fle
 	})
 
 	return connect.NewResponse(&fleetv1.ListCertificatesResponse{Certificates: out}), nil
+}
+
+// RevokeCertificate revokes an issued certificate on the node that issued it.
+// It is operator-gated: it verifies the caller is at least operator level,
+// resolves the named node, dials it, forwards the serial and RFC 5280 reason
+// code to the node's RevokeCertificate, and appends a single "revoked" audit
+// event. A denied caller or an unknown node never reaches the node and never
+// writes an audit event.
+func (s *Service) RevokeCertificate(ctx context.Context, req *connect.Request[fleetv1.RevokeCertificateRequest]) (*connect.Response[fleetv1.RevokeCertificateResponse], error) {
+	id, err := operatorLevel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if id.Level < authz.LevelOperator {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("fleet: operator level required"))
+	}
+
+	name := req.Msg.GetNodeName()
+	node, ok := s.store.Node(name)
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fleet: node %q not found", name))
+	}
+
+	conn, err := s.dial(node)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: dial node: %w", err))
+	}
+	defer func() { _ = conn.Close() }()
+
+	rev, err := conn.RevokeCertificate(ctx, req.Msg.GetSerialHex(), req.Msg.GetReasonCode())
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: revoke: %w", err))
+	}
+
+	revokedAt := ""
+	if r := rev.GetRevocation(); r != nil && r.GetRevokedAt() != nil {
+		revokedAt = r.GetRevokedAt().AsTime().UTC().Format(time.RFC3339)
+	}
+
+	s.store.AddAuditEvent(store.AuditEvent{
+		ID:         newAuditID(),
+		At:         time.Now().UTC().Format(time.RFC3339),
+		Kind:       "revoked",
+		Summary:    fmt.Sprintf("Revoked %s on %s (reason %d)", req.Msg.GetSerialHex(), name, req.Msg.GetReasonCode()),
+		TargetKind: "cert",
+		TargetPath: "/nodes/" + name + "/certs/" + req.Msg.GetSerialHex(),
+	})
+
+	return connect.NewResponse(&fleetv1.RevokeCertificateResponse{
+		SerialHex:  req.Msg.GetSerialHex(),
+		RevokedAt:  revokedAt,
+		ReasonCode: req.Msg.GetReasonCode(),
+	}), nil
 }
 
 // certsForNode dials n and merges its issued certificates with its

@@ -598,6 +598,10 @@ func (r *routingConn) SetManagement(ctx context.Context, m *cryptosv1.Management
 	return r.ferry.SetManagement(ctx, m)
 }
 
+func (r *routingConn) RevokeCertificate(ctx context.Context, serialHex string, reasonCode int32) (*cryptosv1.RevokeCertificateResponse, error) {
+	return r.ferry.RevokeCertificate(ctx, serialHex, reasonCode)
+}
+
 func (r *routingConn) Close() error {
 	_ = r.ferry.Close()
 	return r.identity.Close()

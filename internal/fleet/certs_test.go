@@ -21,12 +21,14 @@ limitations under the License.
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	connect "connectrpc.com/connect"
 	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
 	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/authz"
 	"github.com/CryptOS-PKI/manager/internal/store"
 	"github.com/CryptOS-PKI/manager/internal/store/memory"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -182,5 +184,153 @@ func TestListCertificates_ScopedToUnknownNode_NotFound(t *testing.T) {
 	}
 	if connectErr.Code() != connect.CodeNotFound {
 		t.Errorf("ListCertificates(node=missing) error code = %v, want CodeNotFound", connectErr.Code())
+	}
+}
+
+func TestRevokeCertificate_ViewerDenied_NoDialNoAudit(t *testing.T) {
+	st := certsTestStore()
+	connA := &fakeConn{}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("viewer@acme.example", authz.LevelViewer)
+	_, err := svc.RevokeCertificate(ctx, connect.NewRequest(&fleetv1.RevokeCertificateRequest{
+		NodeName:   "A",
+		SerialHex:  "01",
+		ReasonCode: 1,
+	}))
+	if err == nil {
+		t.Fatal("RevokeCertificate(viewer) error = nil, want PermissionDenied")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if connectErr.Code() != connect.CodePermissionDenied {
+		t.Errorf("code = %v, want CodePermissionDenied", connectErr.Code())
+	}
+	if connA.gotRevokeSerial != "" {
+		t.Errorf("node was dialed and revoked (serial %q), want no call", connA.gotRevokeSerial)
+	}
+	if connA.closed {
+		t.Error("node connection was opened, want no dial")
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event on denial)", len(st.Audit()), before)
+	}
+}
+
+func TestRevokeCertificate_UnknownNode_NotFound(t *testing.T) {
+	st := certsTestStore()
+	svc := New(st, dialFor(map[string]*fakeConn{}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	_, err := svc.RevokeCertificate(ctx, connect.NewRequest(&fleetv1.RevokeCertificateRequest{
+		NodeName:   "missing",
+		SerialHex:  "01",
+		ReasonCode: 1,
+	}))
+	if err == nil {
+		t.Fatal("RevokeCertificate(unknown node) error = nil, want NotFound")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if connectErr.Code() != connect.CodeNotFound {
+		t.Errorf("code = %v, want CodeNotFound", connectErr.Code())
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event when node unknown)", len(st.Audit()), before)
+	}
+}
+
+func TestRevokeCertificate_Operator_RevokesAndAudits(t *testing.T) {
+	now := time.Now().UTC()
+	st := certsTestStore()
+	connA := &fakeConn{
+		revokeResp: &cryptosv1.RevokeCertificateResponse{
+			Revocation: &cryptosv1.Revocation{
+				SerialHex:  "0a1b",
+				RevokedAt:  timestamppb.New(now),
+				ReasonCode: 4,
+			},
+		},
+	}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	resp, err := svc.RevokeCertificate(ctx, connect.NewRequest(&fleetv1.RevokeCertificateRequest{
+		NodeName:   "A",
+		SerialHex:  "0a1b",
+		ReasonCode: 4,
+	}))
+	if err != nil {
+		t.Fatalf("RevokeCertificate(operator) error = %v, want nil", err)
+	}
+
+	if connA.gotRevokeSerial != "0a1b" {
+		t.Errorf("node revoke serial = %q, want 0a1b", connA.gotRevokeSerial)
+	}
+	if connA.gotRevokeReason != 4 {
+		t.Errorf("node revoke reason = %d, want 4", connA.gotRevokeReason)
+	}
+	if !connA.closed {
+		t.Error("node connection was not closed")
+	}
+
+	msg := resp.Msg
+	if msg.GetSerialHex() != "0a1b" {
+		t.Errorf("response serial = %q, want 0a1b", msg.GetSerialHex())
+	}
+	if msg.GetReasonCode() != 4 {
+		t.Errorf("response reason = %d, want 4", msg.GetReasonCode())
+	}
+	if msg.GetRevokedAt() != now.Format(time.RFC3339) {
+		t.Errorf("response revokedAt = %q, want %q", msg.GetRevokedAt(), now.Format(time.RFC3339))
+	}
+
+	audit := st.Audit()
+	if len(audit) != before+1 {
+		t.Fatalf("audit len = %d, want %d (one new event)", len(audit), before+1)
+	}
+	last := audit[len(audit)-1]
+	if last.Kind != "revoked" {
+		t.Errorf("audit Kind = %q, want revoked", last.Kind)
+	}
+	if !strings.Contains(last.Summary, "0a1b") || !strings.Contains(last.Summary, "A") {
+		t.Errorf("audit Summary = %q, want it to name the serial and node", last.Summary)
+	}
+	if last.TargetKind != "cert" {
+		t.Errorf("audit TargetKind = %q, want cert", last.TargetKind)
+	}
+}
+
+func TestRevokeCertificate_NodeError_MappedNoAudit(t *testing.T) {
+	st := certsTestStore()
+	connA := &fakeConn{err: errors.New("node refused")}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	_, err := svc.RevokeCertificate(ctx, connect.NewRequest(&fleetv1.RevokeCertificateRequest{
+		NodeName:   "A",
+		SerialHex:  "01",
+		ReasonCode: 1,
+	}))
+	if err == nil {
+		t.Fatal("RevokeCertificate(node error) error = nil, want a Connect error")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event when node fails)", len(st.Audit()), before)
 	}
 }

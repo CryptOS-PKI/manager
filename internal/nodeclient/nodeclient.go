@@ -163,6 +163,15 @@ func (c *Client) SetManagement(ctx context.Context, m *cryptosv1.Management) (*c
 	return c.node.SetManagement(ctx, &cryptosv1.SetManagementRequest{Management: m})
 }
 
+// RevokeCertificate revokes an issued certificate on the dialed node,
+// identified by its hex serial, recording the RFC 5280 reason code.
+func (c *Client) RevokeCertificate(ctx context.Context, serialHex string, reasonCode int32) (*cryptosv1.RevokeCertificateResponse, error) {
+	return c.node.RevokeCertificate(ctx, &cryptosv1.RevokeCertificateRequest{
+		SerialHex:  serialHex,
+		ReasonCode: reasonCode,
+	})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

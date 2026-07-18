@@ -69,6 +69,15 @@ type fakeConn struct {
 	// calls records the ordered sequence of ferry-relevant method names
 	// invoked on this fake, so a test can assert call order.
 	calls *[]string
+
+	// gotRevokeSerial and gotRevokeReason record the serial and reason code
+	// RevokeCertificate was called with, so a test can assert the handler
+	// forwarded them to the node unchanged.
+	gotRevokeSerial string
+	gotRevokeReason int32
+	// revokeResp, when set, is returned by RevokeCertificate instead of the
+	// zero-value response.
+	revokeResp *cryptosv1.RevokeCertificateResponse
 }
 
 func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {
@@ -169,6 +178,18 @@ func (f *fakeConn) SetManagement(_ context.Context, m *cryptosv1.Management) (*c
 		return nil, f.err
 	}
 	return &cryptosv1.SetManagementResponse{}, nil
+}
+
+func (f *fakeConn) RevokeCertificate(_ context.Context, serialHex string, reasonCode int32) (*cryptosv1.RevokeCertificateResponse, error) {
+	f.gotRevokeSerial = serialHex
+	f.gotRevokeReason = reasonCode
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.revokeResp != nil {
+		return f.revokeResp, nil
+	}
+	return &cryptosv1.RevokeCertificateResponse{}, nil
 }
 
 // record appends name to the shared call log, if this fake was given one.

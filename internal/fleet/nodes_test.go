@@ -78,6 +78,15 @@ type fakeConn struct {
 	// revokeResp, when set, is returned by RevokeCertificate instead of the
 	// zero-value response.
 	revokeResp *cryptosv1.RevokeCertificateResponse
+
+	// gotIssueCSR and gotIssueProfile record the CSR and profile name
+	// IssueLeaf was called with, so a test can assert the handler forwarded
+	// them to the node unchanged.
+	gotIssueCSR     []byte
+	gotIssueProfile string
+	// issueResp, when set, is returned by IssueLeaf instead of the
+	// zero-value response.
+	issueResp *cryptosv1.IssueLeafResponse
 }
 
 func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {
@@ -190,6 +199,18 @@ func (f *fakeConn) RevokeCertificate(_ context.Context, serialHex string, reason
 		return f.revokeResp, nil
 	}
 	return &cryptosv1.RevokeCertificateResponse{}, nil
+}
+
+func (f *fakeConn) IssueLeaf(_ context.Context, csrDER []byte, profileName string) (*cryptosv1.IssueLeafResponse, error) {
+	f.gotIssueCSR = csrDER
+	f.gotIssueProfile = profileName
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.issueResp != nil {
+		return f.issueResp, nil
+	}
+	return &cryptosv1.IssueLeafResponse{}, nil
 }
 
 // record appends name to the shared call log, if this fake was given one.

@@ -602,6 +602,10 @@ func (r *routingConn) RevokeCertificate(ctx context.Context, serialHex string, r
 	return r.ferry.RevokeCertificate(ctx, serialHex, reasonCode)
 }
 
+func (r *routingConn) IssueLeaf(ctx context.Context, csrDER []byte, profileName string) (*cryptosv1.IssueLeafResponse, error) {
+	return r.ferry.IssueLeaf(ctx, csrDER, profileName)
+}
+
 func (r *routingConn) Close() error {
 	_ = r.ferry.Close()
 	return r.identity.Close()

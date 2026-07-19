@@ -310,6 +310,171 @@ func TestRevokeCertificate_Operator_RevokesAndAudits(t *testing.T) {
 	}
 }
 
+func TestIssueLeaf_ViewerDenied_NoDialNoAudit(t *testing.T) {
+	st := certsTestStore()
+	connA := &fakeConn{}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("viewer@acme.example", authz.LevelViewer)
+	_, err := svc.IssueLeaf(ctx, connect.NewRequest(&fleetv1.IssueLeafRequest{
+		NodeName:    "A",
+		CsrDer:      []byte("csr"),
+		ProfileName: "TLS Server",
+	}))
+	if err == nil {
+		t.Fatal("IssueLeaf(viewer) error = nil, want PermissionDenied")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if connectErr.Code() != connect.CodePermissionDenied {
+		t.Errorf("code = %v, want CodePermissionDenied", connectErr.Code())
+	}
+	if connA.gotIssueCSR != nil {
+		t.Errorf("node was dialed and signed (csr %q), want no call", connA.gotIssueCSR)
+	}
+	if connA.closed {
+		t.Error("node connection was opened, want no dial")
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event on denial)", len(st.Audit()), before)
+	}
+}
+
+func TestIssueLeaf_EmptyCSR_InvalidArgument(t *testing.T) {
+	st := certsTestStore()
+	connA := &fakeConn{}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	_, err := svc.IssueLeaf(ctx, connect.NewRequest(&fleetv1.IssueLeafRequest{
+		NodeName:    "A",
+		CsrDer:      nil,
+		ProfileName: "TLS Server",
+	}))
+	if err == nil {
+		t.Fatal("IssueLeaf(empty CSR) error = nil, want InvalidArgument")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if connectErr.Code() != connect.CodeInvalidArgument {
+		t.Errorf("code = %v, want CodeInvalidArgument", connectErr.Code())
+	}
+	if connA.gotIssueCSR != nil {
+		t.Error("node was dialed and signed, want no call on empty CSR")
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event on invalid argument)", len(st.Audit()), before)
+	}
+}
+
+func TestIssueLeaf_UnknownNode_NotFound(t *testing.T) {
+	st := certsTestStore()
+	svc := New(st, dialFor(map[string]*fakeConn{}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	_, err := svc.IssueLeaf(ctx, connect.NewRequest(&fleetv1.IssueLeafRequest{
+		NodeName:    "missing",
+		CsrDer:      []byte("csr"),
+		ProfileName: "TLS Server",
+	}))
+	if err == nil {
+		t.Fatal("IssueLeaf(unknown node) error = nil, want NotFound")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if connectErr.Code() != connect.CodeNotFound {
+		t.Errorf("code = %v, want CodeNotFound", connectErr.Code())
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event when node unknown)", len(st.Audit()), before)
+	}
+}
+
+func TestIssueLeaf_Operator_SignsAndAudits(t *testing.T) {
+	st := certsTestStore()
+	connA := &fakeConn{
+		issueResp: &cryptosv1.IssueLeafResponse{CertDer: []byte("signed-leaf-der")},
+	}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	resp, err := svc.IssueLeaf(ctx, connect.NewRequest(&fleetv1.IssueLeafRequest{
+		NodeName:    "A",
+		CsrDer:      []byte("csr-der"),
+		ProfileName: "TLS Server",
+	}))
+	if err != nil {
+		t.Fatalf("IssueLeaf(operator) error = %v, want nil", err)
+	}
+
+	if string(connA.gotIssueCSR) != "csr-der" {
+		t.Errorf("node issue CSR = %q, want csr-der", connA.gotIssueCSR)
+	}
+	if connA.gotIssueProfile != "TLS Server" {
+		t.Errorf("node issue profile = %q, want TLS Server", connA.gotIssueProfile)
+	}
+	if !connA.closed {
+		t.Error("node connection was not closed")
+	}
+
+	if string(resp.Msg.GetCertDer()) != "signed-leaf-der" {
+		t.Errorf("response cert = %q, want signed-leaf-der", resp.Msg.GetCertDer())
+	}
+
+	audit := st.Audit()
+	if len(audit) != before+1 {
+		t.Fatalf("audit len = %d, want %d (one new event)", len(audit), before+1)
+	}
+	last := audit[len(audit)-1]
+	if last.Kind != "issued" {
+		t.Errorf("audit Kind = %q, want issued", last.Kind)
+	}
+	if !strings.Contains(last.Summary, "TLS Server") || !strings.Contains(last.Summary, "A") {
+		t.Errorf("audit Summary = %q, want it to name the profile and node", last.Summary)
+	}
+	if last.TargetKind != "cert" {
+		t.Errorf("audit TargetKind = %q, want cert", last.TargetKind)
+	}
+}
+
+func TestIssueLeaf_NodeError_MappedNoAudit(t *testing.T) {
+	st := certsTestStore()
+	connA := &fakeConn{err: errors.New("node refused")}
+	svc := New(st, dialFor(map[string]*fakeConn{"A": connA}))
+
+	before := len(st.Audit())
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	_, err := svc.IssueLeaf(ctx, connect.NewRequest(&fleetv1.IssueLeafRequest{
+		NodeName:    "A",
+		CsrDer:      []byte("csr"),
+		ProfileName: "TLS Server",
+	}))
+	if err == nil {
+		t.Fatal("IssueLeaf(node error) error = nil, want a Connect error")
+	}
+
+	var connectErr *connect.Error
+	if !errors.As(err, &connectErr) {
+		t.Fatalf("error is not a *connect.Error: %v", err)
+	}
+	if len(st.Audit()) != before {
+		t.Errorf("audit len = %d, want %d (no event when node fails)", len(st.Audit()), before)
+	}
+}
+
 func TestRevokeCertificate_NodeError_MappedNoAudit(t *testing.T) {
 	st := certsTestStore()
 	connA := &fakeConn{err: errors.New("node refused")}

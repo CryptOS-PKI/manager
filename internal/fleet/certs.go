@@ -155,6 +155,57 @@ func (s *Service) RevokeCertificate(ctx context.Context, req *connect.Request[fl
 	}), nil
 }
 
+// IssueLeaf signs a leaf certificate on the named issuing node from a
+// browser-generated PKCS#10 CSR. It is operator-gated: it verifies the caller
+// is at least operator level, rejects an empty CSR, resolves the named node,
+// dials it, forwards the CSR and profile to the node's IssueLeaf, and appends
+// a single "issued" audit event. A denied caller, an empty CSR, or an unknown
+// node never reaches the node and never writes an audit event.
+func (s *Service) IssueLeaf(ctx context.Context, req *connect.Request[fleetv1.IssueLeafRequest]) (*connect.Response[fleetv1.IssueLeafResponse], error) {
+	id, err := operatorLevel(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if id.Level < authz.LevelOperator {
+		return nil, connect.NewError(connect.CodePermissionDenied, errors.New("fleet: operator level required"))
+	}
+
+	csrDER := req.Msg.GetCsrDer()
+	if len(csrDER) == 0 {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("fleet: csr_der is required"))
+	}
+
+	name := req.Msg.GetNodeName()
+	node, ok := s.store.Node(name)
+	if !ok {
+		return nil, connect.NewError(connect.CodeNotFound, fmt.Errorf("fleet: node %q not found", name))
+	}
+
+	profile := req.Msg.GetProfileName()
+
+	conn, err := s.dial(node)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: dial node: %w", err))
+	}
+	defer func() { _ = conn.Close() }()
+
+	issued, err := conn.IssueLeaf(ctx, csrDER, profile)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: issue leaf: %w", err))
+	}
+
+	s.store.AddAuditEvent(store.AuditEvent{
+		ID:         newAuditID(),
+		At:         time.Now().UTC().Format(time.RFC3339),
+		Kind:       "issued",
+		Summary:    fmt.Sprintf("Issued leaf via %s on %s", profile, name),
+		TargetKind: "cert",
+		TargetPath: "/nodes/" + name + "/certs",
+	})
+
+	return connect.NewResponse(&fleetv1.IssueLeafResponse{CertDer: issued.GetCertDer()}), nil
+}
+
 // certsForNode dials n and merges its issued certificates with its
 // revocations into the FleetService's Certificate shape. Any dial/list
 // failure is returned to the caller, which skips this node rather than

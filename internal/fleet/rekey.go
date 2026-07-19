@@ -110,6 +110,15 @@ func (s *Service) runRekeyFerry(ctx context.Context, child store.Node, profile s
 		return "", "", 0, connect.NewError(connect.CodeFailedPrecondition, err)
 	}
 
+	// A self-signed root's leaf has subject CN == issuer CN, so resolveParentByCN
+	// resolves the child as its own parent. Re-keying through the ferry would then
+	// ask the root to re-sign itself under a subordinate profile. Rotating a root's
+	// key is not a fleet-mediated operation, so refuse it.
+	if parent.Name == child.Name {
+		return "", "", 0, connect.NewError(connect.CodeFailedPrecondition,
+			fmt.Errorf("fleet: node %q is its own issuer (self-signed root); re-key through the manager is only for subordinate CAs", child.Name))
+	}
+
 	pc, err := s.dial(parent)
 	if err != nil {
 		return "", "", 0, connect.NewError(connect.CodeInternal, fmt.Errorf("fleet: dial parent %q: %w", parent.Name, err))

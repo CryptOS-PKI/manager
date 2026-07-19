@@ -115,6 +115,43 @@ func TestRekeyNode_ParentNotInFleet_FailedPrecondition(t *testing.T) {
 	}
 }
 
+func TestRekeyNode_SelfSignedRoot_FailedPrecondition(t *testing.T) {
+	var calls []string
+	// A self-signed root's identity leaf has subject CN == issuer CN, so
+	// resolveParentByCN resolves the child as its own parent. Re-keying must
+	// refuse rather than ask the root to re-sign itself under a sub-ca profile.
+	childIdentity := &fakeConn{
+		identity: &cryptosv1.GetIdentityResponse{
+			Identity: &cryptosv1.Identity{ChainDer: [][]byte{issuedLeafDER(t, "ACME Root CA", "ACME Root CA")}},
+		},
+	}
+	childFerry := &fakeConn{
+		calls:             &calls,
+		beginRotationResp: &cryptosv1.BeginKeyRotationResponse{CsrDer: []byte("root-csr")},
+	}
+	// parent-1's leaf does not match "ACME Root CA", so only child-1 (itself) matches.
+	parentIdentity := &fakeConn{
+		identity: &cryptosv1.GetIdentityResponse{
+			Identity: &cryptosv1.Identity{ChainDer: [][]byte{issuedLeafDER(t, "parent-1", "ACME Other CA")}},
+		},
+	}
+	parentFerry := &fakeConn{calls: &calls}
+
+	svc := New(rekeyStore(), rekeyDial(childIdentity, childFerry, parentIdentity, parentFerry))
+
+	ctx := operatorCtx("op@acme.example", authz.LevelOperator)
+	_, err := svc.RekeyNode(ctx, connect.NewRequest(&fleetv1.RekeyNodeRequest{NodeName: "child-1", ProfileName: "sub-ca"}))
+	requireConnectCode(t, err, connect.CodeFailedPrecondition)
+
+	if got := len(svc.store.Audit()); got != 0 {
+		t.Errorf("audit events = %d, want 0 for a self-signed root", got)
+	}
+	// The ferry must not complete the rotation.
+	if childFerry.gotCompleteChainPEM != "" {
+		t.Error("CompleteKeyRotation must not run for a self-signed root")
+	}
+}
+
 func TestRekeyNode_Operator_RunsFerryAndAudits(t *testing.T) {
 	var calls []string
 	childIssuerCN := "ACME Intermediate CA"

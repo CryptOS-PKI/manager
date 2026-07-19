@@ -172,6 +172,15 @@ func (c *Client) RevokeCertificate(ctx context.Context, serialHex string, reason
 	})
 }
 
+// IssueLeaf signs a leaf certificate on the dialed node from a DER PKCS#10
+// CSR under the named issuance profile, returning the signed leaf in DER.
+func (c *Client) IssueLeaf(ctx context.Context, csrDER []byte, profileName string) (*cryptosv1.IssueLeafResponse, error) {
+	return c.node.IssueLeaf(ctx, &cryptosv1.IssueLeafRequest{
+		CsrDer:      csrDER,
+		ProfileName: profileName,
+	})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

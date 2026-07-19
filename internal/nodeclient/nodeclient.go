@@ -181,6 +181,23 @@ func (c *Client) IssueLeaf(ctx context.Context, csrDER []byte, profileName strin
 	})
 }
 
+// BeginKeyRotation starts a CA key rotation on the dialed node and returns the
+// DER CSR for the newly generated key, to be ferried to the parent's
+// SignSubordinateCSR.
+func (c *Client) BeginKeyRotation(ctx context.Context) (*cryptosv1.BeginKeyRotationResponse, error) {
+	return c.node.BeginKeyRotation(ctx, &cryptosv1.BeginKeyRotationRequest{})
+}
+
+// CompleteKeyRotation delivers the parent-signed chain (leaf-first: the node's
+// new cert, parent, ..., root) back to the dialed node so it adopts the rotated
+// key as its new identity.
+func (c *Client) CompleteKeyRotation(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.CompleteKeyRotationResponse, error) {
+	return c.node.CompleteKeyRotation(ctx, &cryptosv1.CompleteKeyRotationRequest{
+		ChainDer: chainDER,
+		ChainPem: chainPEM,
+	})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

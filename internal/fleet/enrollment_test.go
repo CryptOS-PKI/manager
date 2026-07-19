@@ -606,6 +606,14 @@ func (r *routingConn) IssueLeaf(ctx context.Context, csrDER []byte, profileName 
 	return r.ferry.IssueLeaf(ctx, csrDER, profileName)
 }
 
+func (r *routingConn) BeginKeyRotation(ctx context.Context) (*cryptosv1.BeginKeyRotationResponse, error) {
+	return r.ferry.BeginKeyRotation(ctx)
+}
+
+func (r *routingConn) CompleteKeyRotation(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.CompleteKeyRotationResponse, error) {
+	return r.ferry.CompleteKeyRotation(ctx, chainDER, chainPEM)
+}
+
 func (r *routingConn) Close() error {
 	_ = r.ferry.Close()
 	return r.identity.Close()

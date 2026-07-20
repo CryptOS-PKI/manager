@@ -28,19 +28,37 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// schemaSQL is the full DDL for the manager's tables, applied once by migrate.
+// schemaSQL is the base DDL for the manager's tables (every table created
+// IF NOT EXISTS), applied as the v1 migration.
 //
 //go:embed schema.sql
 var schemaSQL string
 
-// schemaVersion is the single migration version tracked in schema_migrations.
-// The schema ships as one embedded DDL blob; when it changes, bump this and add
-// the new statements to schema.sql (every table is created IF NOT EXISTS).
-const schemaVersion = "v1"
+// v2ProfilesSQL widens the profiles table to hold the full marshaled
+// cryptos.v1.CertificateProfile (name + spec bytes) rather than the flat
+// projection v1 shipped. A database that first migrates at v2 already has the
+// new table shape from schema.sql, so this DROPs and recreates it to bring an
+// existing v1 database to the same shape. Profiles are seeded (not
+// operator-critical pre-GA), so dropping and reseeding is acceptable.
+const v2ProfilesSQL = `DROP TABLE IF EXISTS profiles;
+CREATE TABLE profiles (name text PRIMARY KEY, spec bytea NOT NULL);`
 
-// migrate applies schema.sql exactly once, tracked in a schema_migrations
-// table, and is safe to run on every startup. Running it against an
-// already-migrated database is a no-op.
+// migration is one ordered, idempotently-tracked schema step.
+type migration struct {
+	version string
+	sql     string
+}
+
+// migrations is the ordered list of schema steps. Each runs at most once,
+// tracked in schema_migrations; appending a new step is how the schema evolves.
+var migrations = []migration{
+	{version: "v1", sql: schemaSQL},
+	{version: "v2", sql: v2ProfilesSQL},
+}
+
+// migrate applies every not-yet-applied migration in order, each tracked in a
+// schema_migrations table, and is safe to run on every startup. Running it
+// against an already-migrated database is a no-op.
 func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	tx, err := pool.Begin(ctx)
 	if err != nil {
@@ -54,22 +72,24 @@ func migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("postgres: create schema_migrations: %w", err)
 	}
 
-	var applied bool
-	if err := tx.QueryRow(ctx,
-		`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`,
-		schemaVersion).Scan(&applied); err != nil {
-		return fmt.Errorf("postgres: check migration %s: %w", schemaVersion, err)
-	}
-	if applied {
-		return tx.Commit(ctx)
-	}
+	for _, m := range migrations {
+		var applied bool
+		if err := tx.QueryRow(ctx,
+			`SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`,
+			m.version).Scan(&applied); err != nil {
+			return fmt.Errorf("postgres: check migration %s: %w", m.version, err)
+		}
+		if applied {
+			continue
+		}
 
-	if _, err := tx.Exec(ctx, schemaSQL); err != nil {
-		return fmt.Errorf("postgres: apply schema %s: %w", schemaVersion, err)
-	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO schema_migrations (version) VALUES ($1)`, schemaVersion); err != nil {
-		return fmt.Errorf("postgres: record migration %s: %w", schemaVersion, err)
+		if _, err := tx.Exec(ctx, m.sql); err != nil {
+			return fmt.Errorf("postgres: apply schema %s: %w", m.version, err)
+		}
+		if _, err := tx.Exec(ctx,
+			`INSERT INTO schema_migrations (version) VALUES ($1)`, m.version); err != nil {
+			return fmt.Errorf("postgres: record migration %s: %w", m.version, err)
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

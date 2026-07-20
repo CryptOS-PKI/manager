@@ -35,17 +35,12 @@ type Node struct {
 	CACert    string
 }
 
-// Profile is a reusable certificate issuance template: key algorithm, usage
-// extensions, and validity. It mirrors cryptos.fleet.v1.CertProfile.
+// Profile is a catalog certificate-issuance template, stored as the marshaled
+// cryptos.v1.CertificateProfile so it is a lossless superset the node accepts
+// verbatim. Name is the catalog identity key; Spec is the marshaled proto.
 type Profile struct {
-	Name         string
-	KeyAlg       string
-	KeyUsage     []string
-	ExtKeyUsage  []string
-	IsCA         bool
-	PathLen      int32
-	Sans         []string
-	ValidityDays int32
+	Name string
+	Spec []byte // marshaled cryptos.v1.CertificateProfile
 }
 
 // Adapter is an enrollment protocol adapter's configuration: which protocol
@@ -106,6 +101,18 @@ type Store interface {
 	Node(name string) (Node, bool)
 	// Profiles returns every certificate issuance profile.
 	Profiles() []Profile
+	// Profile returns the profile with the given name, and whether it was
+	// found.
+	Profile(name string) (Profile, bool)
+	// CreateProfile adds p to the catalog. It errors if a profile with the
+	// same name already exists.
+	CreateProfile(p Profile) error
+	// UpdateProfile replaces the profile with p.Name. It errors if no
+	// profile has that name.
+	UpdateProfile(p Profile) error
+	// DeleteProfile removes the profile with the given name. It errors if no
+	// profile has that name.
+	DeleteProfile(name string) error
 	// Adapters returns every enrollment protocol adapter.
 	Adapters() []Adapter
 	// Audit returns every audit event, in append order.

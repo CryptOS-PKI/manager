@@ -81,7 +81,7 @@ func TestStore_ImplementsInterface(t *testing.T) {
 
 func testCatalog() ([]store.Profile, []store.Adapter, []store.AuditEvent, []store.Enrollment) {
 	profiles := []store.Profile{
-		{Name: "TLS Server (LDAPS)", KeyAlg: "ECDSA-P384", ValidityDays: 365},
+		{Name: "TLS Server (LDAPS)", Spec: []byte("spec-a")},
 	}
 	adapters := []store.Adapter{
 		{Kind: "acme", Name: "ACME (RFC 8555)", Enabled: true},
@@ -256,5 +256,86 @@ func TestStore_AddAuditEvent_ChainsHashes(t *testing.T) {
 	log := s.Audit()
 	if len(log) != 2 || log[0].ID != "a1" || log[1].ID != "a2" {
 		t.Fatalf("Audit() = %+v, want ordered a1,a2", log)
+	}
+}
+
+func TestStore_CreateProfile_RoundTripsSpec(t *testing.T) {
+	s := New(testNodes())
+
+	p := store.Profile{Name: "P", Spec: []byte{0x01, 0x02, 0x03}}
+	if err := s.CreateProfile(p); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	all := s.Profiles()
+	if len(all) != 1 || all[0].Name != "P" {
+		t.Fatalf("Profiles() = %+v, want single P", all)
+	}
+
+	got, ok := s.Profile("P")
+	if !ok {
+		t.Fatal("Profile(P) not found")
+	}
+	if string(got.Spec) != string(p.Spec) {
+		t.Errorf("Profile(P).Spec = %v, want %v", got.Spec, p.Spec)
+	}
+}
+
+func TestStore_CreateProfile_DuplicateErrors(t *testing.T) {
+	s := New(testNodes())
+
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("a")}); err != nil {
+		t.Fatalf("first CreateProfile: %v", err)
+	}
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("b")}); err == nil {
+		t.Fatal("duplicate CreateProfile returned nil, want error")
+	}
+	if got, _ := s.Profile("P"); string(got.Spec) != "a" {
+		t.Errorf("Profile(P).Spec = %q, want the original a", got.Spec)
+	}
+}
+
+func TestStore_UpdateProfile_ReplacesSpec(t *testing.T) {
+	s := New(testNodes())
+
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("a")}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if err := s.UpdateProfile(store.Profile{Name: "P", Spec: []byte("b")}); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if got, _ := s.Profile("P"); string(got.Spec) != "b" {
+		t.Errorf("Profile(P).Spec = %q, want b", got.Spec)
+	}
+}
+
+func TestStore_UpdateProfile_MissingErrors(t *testing.T) {
+	s := New(testNodes())
+	if err := s.UpdateProfile(store.Profile{Name: "nope", Spec: []byte("x")}); err == nil {
+		t.Fatal("UpdateProfile(missing) returned nil, want error")
+	}
+}
+
+func TestStore_DeleteProfile_Removes(t *testing.T) {
+	s := New(testNodes())
+
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("a")}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if err := s.DeleteProfile("P"); err != nil {
+		t.Fatalf("DeleteProfile: %v", err)
+	}
+	if _, ok := s.Profile("P"); ok {
+		t.Error("Profile(P) still found after delete")
+	}
+	if len(s.Profiles()) != 0 {
+		t.Errorf("Profiles() len = %d, want 0", len(s.Profiles()))
+	}
+}
+
+func TestStore_DeleteProfile_MissingErrors(t *testing.T) {
+	s := New(testNodes())
+	if err := s.DeleteProfile("nope"); err == nil {
+		t.Fatal("DeleteProfile(missing) returned nil, want error")
 	}
 }

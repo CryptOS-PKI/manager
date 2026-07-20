@@ -22,7 +22,7 @@ require (
 )
 
 require (
-	github.com/CryptOS-PKI/api v0.0.0-20260719160817-6c44809d292b
+	github.com/CryptOS-PKI/api v0.0.0-20260719165735-7ddd564b4fad
 	golang.org/x/net v0.51.0
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect

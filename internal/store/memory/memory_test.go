@@ -339,3 +339,33 @@ func TestStore_DeleteProfile_MissingErrors(t *testing.T) {
 		t.Fatal("DeleteProfile(missing) returned nil, want error")
 	}
 }
+
+func TestStore_SetAdapterEnabled_Flips(t *testing.T) {
+	profiles, adapters, audit, enrollments := testCatalog()
+	s := NewWithCatalog(testNodes(), profiles, adapters, audit, enrollments)
+
+	got, err := s.SetAdapterEnabled("ACME (RFC 8555)", false)
+	if err != nil {
+		t.Fatalf("SetAdapterEnabled: %v", err)
+	}
+	if got.Enabled {
+		t.Error("returned adapter Enabled = true, want false")
+	}
+	if got.Name != "ACME (RFC 8555)" {
+		t.Errorf("returned adapter Name = %q, want the named adapter", got.Name)
+	}
+
+	list := s.Adapters()
+	if len(list) != 1 || list[0].Enabled {
+		t.Errorf("Adapters() = %+v, want the seeded adapter disabled", list)
+	}
+}
+
+func TestStore_SetAdapterEnabled_MissingErrors(t *testing.T) {
+	profiles, adapters, audit, enrollments := testCatalog()
+	s := NewWithCatalog(testNodes(), profiles, adapters, audit, enrollments)
+
+	if _, err := s.SetAdapterEnabled("missing", true); err == nil {
+		t.Fatal("SetAdapterEnabled(missing) returned nil, want error")
+	}
+}

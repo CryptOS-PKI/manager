@@ -115,6 +115,10 @@ type Store interface {
 	DeleteProfile(name string) error
 	// Adapters returns every enrollment protocol adapter.
 	Adapters() []Adapter
+	// SetAdapterEnabled sets the enabled state of the adapter with the given
+	// name and returns the updated adapter. It errors if no adapter has that
+	// name.
+	SetAdapterEnabled(name string, enabled bool) (Adapter, error)
 	// Audit returns every audit event, in append order.
 	Audit() []AuditEvent
 	// AddAuditEvent appends e to the hash chain: it sets PrevHash to the

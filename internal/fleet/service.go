@@ -49,6 +49,8 @@ type NodeConn interface {
 	IssueLeaf(ctx context.Context, csrDER []byte, profileName string) (*cryptosv1.IssueLeafResponse, error)
 	BeginKeyRotation(ctx context.Context) (*cryptosv1.BeginKeyRotationResponse, error)
 	CompleteKeyRotation(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.CompleteKeyRotationResponse, error)
+	ExportCAKey(ctx context.Context, passphrase []byte) (*cryptosv1.ExportCAKeyResponse, error)
+	ImportCAKey(ctx context.Context, envelope, passphrase []byte) (*cryptosv1.ImportCAKeyResponse, error)
 	Close() error
 }
 

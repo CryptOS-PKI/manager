@@ -594,6 +594,10 @@ func (r *routingConn) ApplyConfig(ctx context.Context, cfg *cryptosv1.MachineCon
 	return r.ferry.ApplyConfig(ctx, cfg)
 }
 
+func (r *routingConn) GetConfig(ctx context.Context) (*cryptosv1.GetConfigResponse, error) {
+	return r.ferry.GetConfig(ctx)
+}
+
 func (r *routingConn) SetManagement(ctx context.Context, m *cryptosv1.Management) (*cryptosv1.SetManagementResponse, error) {
 	return r.ferry.SetManagement(ctx, m)
 }

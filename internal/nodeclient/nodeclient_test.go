@@ -63,6 +63,16 @@ func (fakeNodeService) GetIdentity(context.Context, *cryptosv1.GetIdentityReques
 	}, nil
 }
 
+func (fakeNodeService) GetConfig(context.Context, *cryptosv1.GetConfigRequest) (*cryptosv1.GetConfigResponse, error) {
+	return &cryptosv1.GetConfigResponse{
+		Config: &cryptosv1.MachineConfig{
+			ApiVersion: "cryptos.dev/v1alpha1",
+			Kind:       "MachineConfig",
+			Role:       &cryptosv1.Role{Kind: "fake-config-test-marker"},
+		},
+	}, nil
+}
+
 func (fakeNodeService) ListIssued(context.Context, *cryptosv1.ListIssuedRequest) (*cryptosv1.ListIssuedResponse, error) {
 	return &cryptosv1.ListIssuedResponse{
 		Issued: []*cryptosv1.IssuedCert{
@@ -283,6 +293,14 @@ func TestDial_GetStatus_GetIdentity(t *testing.T) {
 	}
 	if len(revocationsResp.GetRevocations()) != 1 || revocationsResp.GetRevocations()[0].GetSerialHex() != "fake-revoked-test-marker" {
 		t.Errorf("ListRevocations().Revocations = %v, want one entry with serial fake-revoked-test-marker", revocationsResp.GetRevocations())
+	}
+
+	configResp, err := client.GetConfig(ctx)
+	if err != nil {
+		t.Fatalf("GetConfig() error = %v, want nil", err)
+	}
+	if got := configResp.GetConfig().GetRole().GetKind(); got != "fake-config-test-marker" {
+		t.Errorf("GetConfig().Config.Role.Kind = %q, want fake-config-test-marker", got)
 	}
 }
 

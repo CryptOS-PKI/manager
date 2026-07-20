@@ -155,6 +155,13 @@ func (c *Client) ApplyConfig(ctx context.Context, cfg *cryptosv1.MachineConfig) 
 	return c.node.ApplyConfig(ctx, &cryptosv1.ApplyConfigRequest{Config: cfg})
 }
 
+// GetConfig fetches the dialed node's current machine configuration, so a
+// caller can read the full config before editing a subset and applying the
+// whole config back via ApplyConfig.
+func (c *Client) GetConfig(ctx context.Context) (*cryptosv1.GetConfigResponse, error) {
+	return c.node.GetConfig(ctx, &cryptosv1.GetConfigRequest{})
+}
+
 // SetManagement merges Fleet-Manager managed-state into the node's persisted
 // config: it marks the node as managed by this operator CN, adds the
 // operator CA as a trusted client CA, and optionally makes the node's own

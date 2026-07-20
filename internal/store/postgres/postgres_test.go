@@ -306,3 +306,38 @@ func TestProfileCRUD_DeleteMissingErrors(t *testing.T) {
 		t.Fatal("DeleteProfile(missing) returned nil, want error")
 	}
 }
+
+func TestSetAdapterEnabled_Flips(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	if _, err := s.pool.Exec(ctx,
+		`INSERT INTO adapters (name, kind, endpoint, profile, enabled, challenges, gpo_template)
+		 VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+		"acme", "acme", "https://x/acme", "p1", true, []string{"http-01"}, ""); err != nil {
+		t.Fatalf("insert adapter: %v", err)
+	}
+
+	got, err := s.SetAdapterEnabled("acme", false)
+	if err != nil {
+		t.Fatalf("SetAdapterEnabled: %v", err)
+	}
+	if got.Enabled {
+		t.Error("returned adapter Enabled = true, want false")
+	}
+	if got.Name != "acme" || got.Kind != "acme" || len(got.Challenges) != 1 {
+		t.Errorf("returned adapter = %+v, unexpected fields", got)
+	}
+
+	adapters := s.Adapters()
+	if len(adapters) != 1 || adapters[0].Enabled {
+		t.Errorf("Adapters() = %+v, want the adapter disabled", adapters)
+	}
+}
+
+func TestSetAdapterEnabled_MissingErrors(t *testing.T) {
+	s := testStore(t)
+	if _, err := s.SetAdapterEnabled("nope", true); err == nil {
+		t.Fatal("SetAdapterEnabled(missing) returned nil, want error")
+	}
+}

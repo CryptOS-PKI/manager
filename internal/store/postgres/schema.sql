@@ -3,9 +3,7 @@ CREATE TABLE IF NOT EXISTS nodes (
   admin_cert text NOT NULL, admin_key text NOT NULL, ca_cert text NOT NULL
 );
 CREATE TABLE IF NOT EXISTS profiles (
-  name text PRIMARY KEY, key_alg text NOT NULL, key_usage text[] NOT NULL,
-  ext_key_usage text[] NOT NULL, is_ca boolean NOT NULL, path_len int NOT NULL,
-  sans text[] NOT NULL, validity_days int NOT NULL
+  name text PRIMARY KEY, spec bytea NOT NULL
 );
 CREATE TABLE IF NOT EXISTS adapters (
   name text PRIMARY KEY, kind text NOT NULL, endpoint text NOT NULL,

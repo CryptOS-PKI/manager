@@ -87,6 +87,42 @@ type fakeConn struct {
 	// issueResp, when set, is returned by IssueLeaf instead of the
 	// zero-value response.
 	issueResp *cryptosv1.IssueLeafResponse
+
+	// beginRotationResp, when set, is returned by BeginKeyRotation instead of
+	// the zero-value response (the re-key ferry reads its CSR).
+	beginRotationResp *cryptosv1.BeginKeyRotationResponse
+	// gotCompleteChainDER and gotCompleteChainPEM record the chain
+	// CompleteKeyRotation was called with, so a re-key test can assert the
+	// ferry delivered the parent-signed chain unchanged.
+	gotCompleteChainDER [][]byte
+	gotCompleteChainPEM string
+	// completeRotationResp, when set, is returned by CompleteKeyRotation
+	// instead of the zero-value response (it carries the adopted identity).
+	completeRotationResp *cryptosv1.CompleteKeyRotationResponse
+}
+
+func (f *fakeConn) BeginKeyRotation(context.Context) (*cryptosv1.BeginKeyRotationResponse, error) {
+	f.record("BeginKeyRotation")
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.beginRotationResp != nil {
+		return f.beginRotationResp, nil
+	}
+	return &cryptosv1.BeginKeyRotationResponse{}, nil
+}
+
+func (f *fakeConn) CompleteKeyRotation(_ context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.CompleteKeyRotationResponse, error) {
+	f.record("CompleteKeyRotation")
+	f.gotCompleteChainDER = chainDER
+	f.gotCompleteChainPEM = chainPEM
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.completeRotationResp != nil {
+		return f.completeRotationResp, nil
+	}
+	return &cryptosv1.CompleteKeyRotationResponse{}, nil
 }
 
 func (f *fakeConn) GetStatus(context.Context) (*cryptosv1.GetStatusResponse, error) {

@@ -107,8 +107,7 @@ func (s *Store) Node(name string) (store.Node, bool) {
 // Profiles returns every certificate issuance profile.
 func (s *Store) Profiles() []store.Profile {
 	rows, err := s.pool.Query(bg(),
-		`SELECT name, key_alg, key_usage, ext_key_usage, is_ca, path_len, sans, validity_days
-		 FROM profiles ORDER BY name`)
+		`SELECT name, spec FROM profiles ORDER BY name`)
 	if err != nil {
 		panic(fmt.Sprintf("postgres: query profiles: %v", err))
 	}
@@ -117,7 +116,7 @@ func (s *Store) Profiles() []store.Profile {
 	out := make([]store.Profile, 0)
 	for rows.Next() {
 		var p store.Profile
-		if err := rows.Scan(&p.Name, &p.KeyAlg, &p.KeyUsage, &p.ExtKeyUsage, &p.IsCA, &p.PathLen, &p.Sans, &p.ValidityDays); err != nil {
+		if err := rows.Scan(&p.Name, &p.Spec); err != nil {
 			panic(fmt.Sprintf("postgres: scan profile: %v", err))
 		}
 		out = append(out, p)
@@ -126,6 +125,62 @@ func (s *Store) Profiles() []store.Profile {
 		panic(fmt.Sprintf("postgres: iterate profiles: %v", err))
 	}
 	return out
+}
+
+// Profile returns the profile with the given name, and whether it was found.
+func (s *Store) Profile(name string) (store.Profile, bool) {
+	var p store.Profile
+	err := s.pool.QueryRow(bg(),
+		`SELECT name, spec FROM profiles WHERE name = $1`, name).Scan(&p.Name, &p.Spec)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Profile{}, false
+	}
+	if err != nil {
+		panic(fmt.Sprintf("postgres: query profile %q: %v", name, err))
+	}
+	return p, true
+}
+
+// CreateProfile inserts p into the catalog. It returns an error if a profile
+// with the same name already exists (the primary-key conflict).
+func (s *Store) CreateProfile(p store.Profile) error {
+	tag, err := s.pool.Exec(bg(),
+		`INSERT INTO profiles (name, spec) VALUES ($1, $2)
+		 ON CONFLICT (name) DO NOTHING`, p.Name, p.Spec)
+	if err != nil {
+		return fmt.Errorf("postgres: insert profile %q: %w", p.Name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("postgres: profile %q already exists", p.Name)
+	}
+	return nil
+}
+
+// UpdateProfile replaces the spec of the profile named p.Name. It returns an
+// error if no profile has that name.
+func (s *Store) UpdateProfile(p store.Profile) error {
+	tag, err := s.pool.Exec(bg(),
+		`UPDATE profiles SET spec = $2 WHERE name = $1`, p.Name, p.Spec)
+	if err != nil {
+		return fmt.Errorf("postgres: update profile %q: %w", p.Name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("postgres: profile %q not found", p.Name)
+	}
+	return nil
+}
+
+// DeleteProfile removes the profile with the given name. It returns an error
+// if no profile has that name.
+func (s *Store) DeleteProfile(name string) error {
+	tag, err := s.pool.Exec(bg(), `DELETE FROM profiles WHERE name = $1`, name)
+	if err != nil {
+		return fmt.Errorf("postgres: delete profile %q: %w", name, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("postgres: profile %q not found", name)
+	}
+	return nil
 }
 
 // Adapters returns every enrollment protocol adapter.
@@ -318,9 +373,8 @@ func (s *Store) SeedIfEmpty(ctx context.Context, nodes []store.Node, profiles []
 	}
 	for _, p := range profiles {
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO profiles (name, key_alg, key_usage, ext_key_usage, is_ca, path_len, sans, validity_days)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-			p.Name, p.KeyAlg, nonNil(p.KeyUsage), nonNil(p.ExtKeyUsage), p.IsCA, p.PathLen, nonNil(p.Sans), p.ValidityDays); err != nil {
+			`INSERT INTO profiles (name, spec) VALUES ($1, $2)`,
+			p.Name, p.Spec); err != nil {
 			return fmt.Errorf("postgres: seed profile %q: %w", p.Name, err)
 		}
 	}

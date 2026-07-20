@@ -96,6 +96,68 @@ func (s *Store) Profiles() []store.Profile {
 	return out
 }
 
+// Profile returns the profile with the given name, and whether it was found.
+func (s *Store) Profile(name string) (store.Profile, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, p := range s.profiles {
+		if p.Name == name {
+			return p, true
+		}
+	}
+
+	return store.Profile{}, false
+}
+
+// CreateProfile appends p to the catalog. It returns an error if a profile
+// with the same name already exists.
+func (s *Store) CreateProfile(p store.Profile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, existing := range s.profiles {
+		if existing.Name == p.Name {
+			return fmt.Errorf("memory: profile %q already exists", p.Name)
+		}
+	}
+	s.profiles = append(s.profiles, p)
+
+	return nil
+}
+
+// UpdateProfile replaces the profile named p.Name. It returns an error if no
+// profile has that name.
+func (s *Store) UpdateProfile(p store.Profile) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.profiles {
+		if s.profiles[i].Name == p.Name {
+			s.profiles[i] = p
+			return nil
+		}
+	}
+
+	return fmt.Errorf("memory: profile %q not found", p.Name)
+}
+
+// DeleteProfile removes the profile with the given name. It returns an error
+// if no profile has that name.
+func (s *Store) DeleteProfile(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.profiles {
+		if s.profiles[i].Name == name {
+			s.profiles = append(s.profiles[:i], s.profiles[i+1:]...)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("memory: profile %q not found", name)
+}
+
 // Adapters returns every enrollment protocol adapter.
 func (s *Store) Adapters() []store.Adapter {
 	s.mu.RLock()

@@ -61,9 +61,8 @@ func TestProfileAndAdapterReads(t *testing.T) {
 	ctx := context.Background()
 
 	if _, err := s.pool.Exec(ctx,
-		`INSERT INTO profiles (name, key_alg, key_usage, ext_key_usage, is_ca, path_len, sans, validity_days)
-		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		"p1", "ECDSA-P384", []string{"digital_signature"}, []string{"server_auth"}, false, 0, []string{"a.example"}, 365); err != nil {
+		`INSERT INTO profiles (name, spec) VALUES ($1,$2)`,
+		"p1", []byte{0x0a, 0x02, 0x70, 0x31}); err != nil {
 		t.Fatalf("insert profile: %v", err)
 	}
 	if _, err := s.pool.Exec(ctx,
@@ -74,7 +73,7 @@ func TestProfileAndAdapterReads(t *testing.T) {
 	}
 
 	profiles := s.Profiles()
-	if len(profiles) != 1 || profiles[0].KeyAlg != "ECDSA-P384" || len(profiles[0].Sans) != 1 || profiles[0].Sans[0] != "a.example" {
+	if len(profiles) != 1 || profiles[0].Name != "p1" || len(profiles[0].Spec) != 4 {
 		t.Fatalf("Profiles() = %+v, unexpected", profiles)
 	}
 
@@ -206,7 +205,7 @@ func TestSeedIfEmpty(t *testing.T) {
 	ctx := context.Background()
 
 	nodes := []store.Node{{Name: "n1", Endpoint: "n1:443", Role: "root", AdminCert: "c", AdminKey: "k", CACert: "ca"}}
-	profiles := []store.Profile{{Name: "p1", KeyAlg: "ECDSA-P384", ValidityDays: 365}}
+	profiles := []store.Profile{{Name: "p1", Spec: []byte("spec-p1")}}
 	adapters := []store.Adapter{{Name: "acme", Kind: "acme", Endpoint: "https://x", Profile: "p1", Enabled: true}}
 	audit := []store.AuditEvent{{ID: "aud-0", At: "t0", Kind: "issued", Summary: "seed"}}
 	enrollments := []store.Enrollment{{ID: "enr-0", Kind: "LINK", Status: "PENDING", ProposedName: "n1", RequestedAt: "t0"}}
@@ -224,5 +223,86 @@ func TestSeedIfEmpty(t *testing.T) {
 	}
 	if len(s.Nodes()) != 1 || len(s.Enrollments()) != 1 {
 		t.Fatalf("second seed duplicated rows: nodes=%d enrollments=%d", len(s.Nodes()), len(s.Enrollments()))
+	}
+}
+
+func TestProfileCRUD_RoundTripsSpec(t *testing.T) {
+	s := testStore(t)
+
+	spec := []byte{0x00, 0x01, 0x02, 0xff, 0xfe}
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: spec}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+
+	got, ok := s.Profile("P")
+	if !ok {
+		t.Fatal("Profile(P) not found after create")
+	}
+	if string(got.Spec) != string(spec) {
+		t.Errorf("Profile(P).Spec = %v, want %v", got.Spec, spec)
+	}
+
+	all := s.Profiles()
+	if len(all) != 1 || all[0].Name != "P" || string(all[0].Spec) != string(spec) {
+		t.Fatalf("Profiles() = %+v, want single P with the exact spec", all)
+	}
+}
+
+func TestProfileCRUD_DuplicateCreateErrors(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("a")}); err != nil {
+		t.Fatalf("first CreateProfile: %v", err)
+	}
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("b")}); err == nil {
+		t.Fatal("duplicate CreateProfile returned nil, want error")
+	}
+	if got, _ := s.Profile("P"); string(got.Spec) != "a" {
+		t.Errorf("Profile(P).Spec = %q, want the original a", got.Spec)
+	}
+}
+
+func TestProfileCRUD_UpdateReplacesSpec(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("a")}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if err := s.UpdateProfile(store.Profile{Name: "P", Spec: []byte("b")}); err != nil {
+		t.Fatalf("UpdateProfile: %v", err)
+	}
+	if got, _ := s.Profile("P"); string(got.Spec) != "b" {
+		t.Errorf("Profile(P).Spec = %q, want b", got.Spec)
+	}
+}
+
+func TestProfileCRUD_UpdateMissingErrors(t *testing.T) {
+	s := testStore(t)
+	if err := s.UpdateProfile(store.Profile{Name: "nope", Spec: []byte("x")}); err == nil {
+		t.Fatal("UpdateProfile(missing) returned nil, want error")
+	}
+}
+
+func TestProfileCRUD_DeleteRemoves(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.CreateProfile(store.Profile{Name: "P", Spec: []byte("a")}); err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if err := s.DeleteProfile("P"); err != nil {
+		t.Fatalf("DeleteProfile: %v", err)
+	}
+	if _, ok := s.Profile("P"); ok {
+		t.Error("Profile(P) still found after delete")
+	}
+	if len(s.Profiles()) != 0 {
+		t.Errorf("Profiles() len = %d, want 0", len(s.Profiles()))
+	}
+}
+
+func TestProfileCRUD_DeleteMissingErrors(t *testing.T) {
+	s := testStore(t)
+	if err := s.DeleteProfile("nope"); err == nil {
+		t.Fatal("DeleteProfile(missing) returned nil, want error")
 	}
 }

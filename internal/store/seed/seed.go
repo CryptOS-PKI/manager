@@ -22,7 +22,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-import "github.com/CryptOS-PKI/manager/internal/store"
+import (
+	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/store"
+	"google.golang.org/protobuf/proto"
+)
 
 // Catalog returns the manager's seeded profiles, adapters, audit events,
 // and enrollment requests.
@@ -30,55 +34,63 @@ func Catalog() (profiles []store.Profile, adapters []store.Adapter, audit []stor
 	return profilesSeed(), adaptersSeed(), auditSeed(), enrollmentsSeed()
 }
 
+// profilesSeed builds the five built-in catalog templates as full
+// cryptos.v1.CertificateProfile values and marshals each into a store.Profile.
+// The catalog is the same proto shape a node stores in pki.profiles[], so a
+// seeded profile applies to a node verbatim.
 func profilesSeed() []store.Profile {
-	return []store.Profile{
+	pathLen0 := uint32(0)
+	specs := []*cryptosv1.CertificateProfile{
 		{
-			Name:         "TLS Server (LDAPS)",
-			KeyAlg:       "ECDSA-P384",
-			KeyUsage:     []string{"digital_signature", "key_encipherment"},
-			ExtKeyUsage:  []string{"server_auth"},
-			IsCA:         false,
-			Sans:         []string{},
-			ValidityDays: 365,
+			Name:             "TLS Server (LDAPS)",
+			KeyAlg:           "ECDSA-P384",
+			ValidityDays:     365,
+			BasicConstraints: &cryptosv1.BasicConstraints{IsCa: false},
+			KeyUsage:         []string{"digital_signature", "key_encipherment"},
+			ExtKeyUsage:      []string{"server_auth"},
 		},
 		{
-			Name:         "TLS Client",
-			KeyAlg:       "ECDSA-P384",
-			KeyUsage:     []string{"digital_signature"},
-			ExtKeyUsage:  []string{"client_auth"},
-			IsCA:         false,
-			Sans:         []string{},
-			ValidityDays: 365,
+			Name:             "TLS Client",
+			KeyAlg:           "ECDSA-P384",
+			ValidityDays:     365,
+			BasicConstraints: &cryptosv1.BasicConstraints{IsCa: false},
+			KeyUsage:         []string{"digital_signature"},
+			ExtKeyUsage:      []string{"client_auth"},
 		},
 		{
-			Name:         "Domain Controller",
-			KeyAlg:       "ECDSA-P384",
-			KeyUsage:     []string{"digital_signature", "key_encipherment"},
-			ExtKeyUsage:  []string{"server_auth", "client_auth"},
-			IsCA:         false,
-			Sans:         []string{},
-			ValidityDays: 365,
+			Name:             "Domain Controller",
+			KeyAlg:           "ECDSA-P384",
+			ValidityDays:     365,
+			BasicConstraints: &cryptosv1.BasicConstraints{IsCa: false},
+			KeyUsage:         []string{"digital_signature", "key_encipherment"},
+			ExtKeyUsage:      []string{"server_auth", "client_auth"},
 		},
 		{
-			Name:         "Code Signing",
-			KeyAlg:       "RSA-3072",
-			KeyUsage:     []string{"digital_signature"},
-			ExtKeyUsage:  []string{"code_signing"},
-			IsCA:         false,
-			Sans:         []string{},
-			ValidityDays: 1095,
+			Name:             "Code Signing",
+			KeyAlg:           "RSA-3072",
+			ValidityDays:     1095,
+			BasicConstraints: &cryptosv1.BasicConstraints{IsCa: false},
+			KeyUsage:         []string{"digital_signature"},
+			ExtKeyUsage:      []string{"code_signing"},
 		},
 		{
-			Name:         "Subordinate CA",
-			KeyAlg:       "ECDSA-P384",
-			KeyUsage:     []string{"cert_sign", "crl_sign"},
-			ExtKeyUsage:  []string{},
-			IsCA:         true,
-			PathLen:      0,
-			Sans:         []string{},
-			ValidityDays: 1825,
+			Name:             "Subordinate CA",
+			KeyAlg:           "ECDSA-P384",
+			ValidityDays:     1825,
+			BasicConstraints: &cryptosv1.BasicConstraints{IsCa: true, PathLen: &pathLen0},
+			KeyUsage:         []string{"cert_sign", "crl_sign"},
 		},
 	}
+
+	profiles := make([]store.Profile, len(specs))
+	for i, spec := range specs {
+		raw, err := proto.Marshal(spec)
+		if err != nil {
+			panic("seed: marshal profile " + spec.GetName() + ": " + err.Error())
+		}
+		profiles[i] = store.Profile{Name: spec.GetName(), Spec: raw}
+	}
+	return profiles
 }
 
 func adaptersSeed() []store.Adapter {

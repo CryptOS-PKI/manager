@@ -54,7 +54,7 @@ func TestListProfiles_ReturnsSeededRows(t *testing.T) {
 			if p.GetKeyAlg() != "ECDSA-P384" {
 				t.Errorf("profile KeyAlg = %q, want ECDSA-P384", p.GetKeyAlg())
 			}
-			if p.GetIsCa() {
+			if p.GetBasicConstraints().GetIsCa() {
 				t.Error("TLS Server (LDAPS) IsCa = true, want false")
 			}
 		}

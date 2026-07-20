@@ -20,22 +20,41 @@ limitations under the License.
 
 import (
 	"context"
+	"fmt"
 
 	connect "connectrpc.com/connect"
 	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
+	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
 	"github.com/CryptOS-PKI/manager/internal/store"
+	"google.golang.org/protobuf/proto"
 )
 
 // ListProfiles returns every certificate issuance profile known to the
-// manager's store. This is a pure Store read; no node is dialed.
+// manager's store, each unmarshaled from its stored spec into the full
+// cryptos.v1.CertificateProfile the node also uses. This is a pure Store read;
+// no node is dialed. Operator-readable.
 func (s *Service) ListProfiles(_ context.Context, _ *connect.Request[fleetv1.ListProfilesRequest]) (*connect.Response[fleetv1.ListProfilesResponse], error) {
 	profiles := s.store.Profiles()
-	items := make([]*fleetv1.CertProfile, len(profiles))
+	items := make([]*cryptosv1.CertificateProfile, len(profiles))
 	for i, p := range profiles {
-		items[i] = profileToProto(p)
+		cp, err := unmarshalProfile(p)
+		if err != nil {
+			return nil, connect.NewError(connect.CodeInternal, err)
+		}
+		items[i] = cp
 	}
 
 	return connect.NewResponse(&fleetv1.ListProfilesResponse{Items: items}), nil
+}
+
+// unmarshalProfile decodes a stored profile's spec bytes into a
+// cryptos.v1.CertificateProfile.
+func unmarshalProfile(p store.Profile) (*cryptosv1.CertificateProfile, error) {
+	cp := &cryptosv1.CertificateProfile{}
+	if err := proto.Unmarshal(p.Spec, cp); err != nil {
+		return nil, fmt.Errorf("fleet: unmarshal profile %q: %w", p.Name, err)
+	}
+	return cp, nil
 }
 
 // ListAdapters returns every enrollment protocol adapter known to the
@@ -72,19 +91,6 @@ func (s *Service) ListEnrollments(_ context.Context, _ *connect.Request[fleetv1.
 	}
 
 	return connect.NewResponse(&fleetv1.ListEnrollmentsResponse{Items: items}), nil
-}
-
-func profileToProto(p store.Profile) *fleetv1.CertProfile {
-	return &fleetv1.CertProfile{
-		Name:         p.Name,
-		KeyAlg:       p.KeyAlg,
-		KeyUsage:     p.KeyUsage,
-		ExtKeyUsage:  p.ExtKeyUsage,
-		IsCa:         p.IsCA,
-		PathLen:      p.PathLen,
-		Sans:         p.Sans,
-		ValidityDays: p.ValidityDays,
-	}
 }
 
 func adapterToProto(a store.Adapter) *fleetv1.EnrollmentAdapter {

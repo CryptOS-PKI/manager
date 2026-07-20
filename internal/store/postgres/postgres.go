@@ -207,6 +207,25 @@ func (s *Store) Adapters() []store.Adapter {
 	return out
 }
 
+// SetAdapterEnabled sets the enabled state of the adapter with the given name
+// and returns the updated adapter. It returns an error if no adapter has that
+// name.
+func (s *Store) SetAdapterEnabled(name string, enabled bool) (store.Adapter, error) {
+	var a store.Adapter
+	err := s.pool.QueryRow(bg(),
+		`UPDATE adapters SET enabled = $2 WHERE name = $1
+		 RETURNING name, kind, endpoint, profile, enabled, challenges, gpo_template`,
+		name, enabled).
+		Scan(&a.Name, &a.Kind, &a.Endpoint, &a.Profile, &a.Enabled, &a.Challenges, &a.GPOTemplate)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return store.Adapter{}, fmt.Errorf("postgres: adapter %q not found", name)
+	}
+	if err != nil {
+		return store.Adapter{}, fmt.Errorf("postgres: set adapter %q enabled: %w", name, err)
+	}
+	return a, nil
+}
+
 // Audit returns every audit event ordered by append sequence.
 func (s *Store) Audit() []store.AuditEvent {
 	rows, err := s.pool.Query(bg(),

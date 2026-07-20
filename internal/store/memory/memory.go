@@ -169,6 +169,23 @@ func (s *Store) Adapters() []store.Adapter {
 	return out
 }
 
+// SetAdapterEnabled sets the enabled state of the adapter with the given name
+// and returns the updated adapter. It returns an error if no adapter has that
+// name.
+func (s *Store) SetAdapterEnabled(name string, enabled bool) (store.Adapter, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.adapters {
+		if s.adapters[i].Name == name {
+			s.adapters[i].Enabled = enabled
+			return s.adapters[i], nil
+		}
+	}
+
+	return store.Adapter{}, fmt.Errorf("memory: adapter %q not found", name)
+}
+
 // Audit returns every audit event.
 func (s *Store) Audit() []store.AuditEvent {
 	s.mu.RLock()

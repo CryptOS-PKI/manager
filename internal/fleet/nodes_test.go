@@ -99,6 +99,16 @@ type fakeConn struct {
 	// completeRotationResp, when set, is returned by CompleteKeyRotation
 	// instead of the zero-value response (it carries the adopted identity).
 	completeRotationResp *cryptosv1.CompleteKeyRotationResponse
+
+	// getConfigResp, when set, is returned by GetConfig instead of the
+	// zero-value response (the config-push flow fetches the node's baseline).
+	getConfigResp *cryptosv1.GetConfigResponse
+	// gotApplyConfig records the MachineConfig ApplyConfig was called with, so
+	// a test can assert the handler pushed the exact config from the request.
+	gotApplyConfig *cryptosv1.MachineConfig
+	// applyConfigResp, when set, is returned by ApplyConfig instead of the
+	// zero-value response (it carries the generation and requires_reboot).
+	applyConfigResp *cryptosv1.ApplyConfigResponse
 }
 
 func (f *fakeConn) BeginKeyRotation(context.Context) (*cryptosv1.BeginKeyRotationResponse, error) {
@@ -210,11 +220,25 @@ func (f *fakeConn) SubmitSubordinateCertificate(context.Context, [][]byte, strin
 	return &cryptosv1.SubmitSubordinateCertificateResponse{}, nil
 }
 
-func (f *fakeConn) ApplyConfig(context.Context, *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error) {
+func (f *fakeConn) ApplyConfig(_ context.Context, cfg *cryptosv1.MachineConfig) (*cryptosv1.ApplyConfigResponse, error) {
+	f.gotApplyConfig = cfg
 	if f.err != nil {
 		return nil, f.err
 	}
+	if f.applyConfigResp != nil {
+		return f.applyConfigResp, nil
+	}
 	return &cryptosv1.ApplyConfigResponse{}, nil
+}
+
+func (f *fakeConn) GetConfig(context.Context) (*cryptosv1.GetConfigResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.getConfigResp != nil {
+		return f.getConfigResp, nil
+	}
+	return &cryptosv1.GetConfigResponse{}, nil
 }
 
 func (f *fakeConn) SetManagement(_ context.Context, m *cryptosv1.Management) (*cryptosv1.SetManagementResponse, error) {

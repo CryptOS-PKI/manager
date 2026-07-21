@@ -618,6 +618,14 @@ func (r *routingConn) CompleteKeyRotation(ctx context.Context, chainDER [][]byte
 	return r.ferry.CompleteKeyRotation(ctx, chainDER, chainPEM)
 }
 
+func (r *routingConn) ExportCAKey(ctx context.Context, passphrase []byte) (*cryptosv1.ExportCAKeyResponse, error) {
+	return r.ferry.ExportCAKey(ctx, passphrase)
+}
+
+func (r *routingConn) ImportCAKey(ctx context.Context, envelope, passphrase []byte) (*cryptosv1.ImportCAKeyResponse, error) {
+	return r.ferry.ImportCAKey(ctx, envelope, passphrase)
+}
+
 func (r *routingConn) Close() error {
 	_ = r.ferry.Close()
 	return r.identity.Close()

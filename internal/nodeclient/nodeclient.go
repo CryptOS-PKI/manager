@@ -205,6 +205,21 @@ func (c *Client) CompleteKeyRotation(ctx context.Context, chainDER [][]byte, cha
 	})
 }
 
+// ExportCAKey asks the dialed node to seal its CA private key into an
+// encrypted backup envelope using the operator passphrase. The node performs
+// the encryption; the passphrase is relayed in transit only and never
+// persisted by the manager.
+func (c *Client) ExportCAKey(ctx context.Context, passphrase []byte) (*cryptosv1.ExportCAKeyResponse, error) {
+	return c.node.ExportCAKey(ctx, &cryptosv1.ExportCAKeyRequest{Passphrase: passphrase})
+}
+
+// ImportCAKey delivers an encrypted backup envelope and its passphrase to the
+// dialed node so it can decrypt and adopt the restored CA identity. The
+// passphrase is relayed in transit only and never persisted by the manager.
+func (c *Client) ImportCAKey(ctx context.Context, envelope, passphrase []byte) (*cryptosv1.ImportCAKeyResponse, error) {
+	return c.node.ImportCAKey(ctx, &cryptosv1.ImportCAKeyRequest{Envelope: envelope, Passphrase: passphrase})
+}
+
 // Close releases the underlying gRPC connection.
 func (c *Client) Close() error {
 	return c.conn.Close()

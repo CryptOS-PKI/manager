@@ -27,6 +27,7 @@ import (
 
 	fleetv1connect "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1/fleetv1connect"
 	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/nodeclient"
 	"github.com/CryptOS-PKI/manager/internal/store"
 )
 
@@ -51,6 +52,8 @@ type NodeConn interface {
 	CompleteKeyRotation(ctx context.Context, chainDER [][]byte, chainPEM string) (*cryptosv1.CompleteKeyRotationResponse, error)
 	ExportCAKey(ctx context.Context, passphrase []byte) (*cryptosv1.ExportCAKeyResponse, error)
 	ImportCAKey(ctx context.Context, envelope, passphrase []byte) (*cryptosv1.ImportCAKeyResponse, error)
+	RemoteReset(ctx context.Context, confirmCN string) (*cryptosv1.RemoteResetResponse, error)
+	StartCeremony(ctx context.Context, kind cryptosv1.CeremonyKind, machineConfigYAML []byte) (nodeclient.CeremonyStream, error)
 	Close() error
 }
 
@@ -62,6 +65,17 @@ type Service struct {
 
 	dialPEM       func(endpoint, certPEM, keyPEM, caPEM string) (NodeConn, error)
 	operatorCAPEM string
+
+	// operatorCANodeName is the inventory name of the node that acts as the
+	// operator CA: operator-credential issuance and revocation route there.
+	operatorCANodeName string
+
+	// previewCert fetches a not-yet-adopted node's maintenance cert
+	// fingerprint + subject (TOFU preview). dialMaintenance opens a
+	// TOFU-pinned maintenance connection. Both are seams so tests inject fakes
+	// instead of reaching a real node; production wires nodeclient.
+	previewCert     func(endpoint string) (certSHA256, subject string, err error)
+	dialMaintenance func(endpoint, pinnedSHA256 string) (NodeConn, error)
 }
 
 // New builds a Service backed by st, dialing nodes with dial. Callers in
@@ -76,6 +90,26 @@ func New(st store.Store, dial func(store.Node) (NodeConn, error)) *Service {
 func (s *Service) WithEnrollment(dialPEM func(endpoint, certPEM, keyPEM, caPEM string) (NodeConn, error), operatorCAPEM string) *Service {
 	s.dialPEM = dialPEM
 	s.operatorCAPEM = operatorCAPEM
+
+	return s
+}
+
+// WithOperatorCA names the inventory node that serves as the operator CA. The
+// S9 operator-credential handlers route issuance and revocation to this node.
+// An empty name leaves the handlers reporting FailedPrecondition. Returns s for
+// chaining.
+func (s *Service) WithOperatorCA(nodeName string) *Service {
+	s.operatorCANodeName = nodeName
+
+	return s
+}
+
+// WithAdoption supplies the S10 adoption seams: previewCert fetches a
+// maintenance node's TOFU fingerprint, and dialMaintenance opens a pinned
+// maintenance connection. Returns s for chaining.
+func (s *Service) WithAdoption(previewCert func(endpoint string) (certSHA256, subject string, err error), dialMaintenance func(endpoint, pinnedSHA256 string) (NodeConn, error)) *Service {
+	s.previewCert = previewCert
+	s.dialMaintenance = dialMaintenance
 
 	return s
 }

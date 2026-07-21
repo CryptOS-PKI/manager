@@ -24,12 +24,30 @@ import (
 	"strings"
 )
 
+// serialRevoker reports whether a client-cert serial has been revoked. The
+// RevocationCache satisfies it; a nil revoker disables enforcement.
+type serialRevoker interface {
+	IsRevoked(serial string) bool
+}
+
 // ClientCertMiddleware extracts the operator identity from the verified TLS
-// peer certificate and puts it on the request context. The TLS layer
-// (RequireAndVerifyClientCert + operator CA) guarantees any presented cert is
-// trusted; this only reads it. A request with no peer cert is 401; a cert
-// without the access-level extension is 403.
+// peer certificate and puts it on the request context, with no revocation
+// enforcement. It is the plain path used where no operator-CA revocation source
+// is configured. A request with no peer cert is 401; a cert without the
+// access-level extension is 403.
 func ClientCertMiddleware(next http.Handler) http.Handler {
+	return ClientCertMiddlewareWithRevocation(nil, next)
+}
+
+// ClientCertMiddlewareWithRevocation extracts the operator identity from the
+// verified TLS peer certificate and puts it on the request context. The TLS
+// layer (RequireAndVerifyClientCert + operator CA) guarantees any presented
+// cert is trusted; this reads it and, when revoker is non-nil, additionally
+// denies a client whose serial is in the operator-CA's revoked set. A request
+// with no peer cert is 401; a cert without the access-level extension, or one
+// whose serial has been revoked, is 403. A nil revoker disables the revocation
+// check (identical to ClientCertMiddleware).
+func ClientCertMiddlewareWithRevocation(revoker serialRevoker, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 			http.Error(w, "client certificate required", http.StatusUnauthorized)
@@ -41,7 +59,12 @@ func ClientCertMiddleware(next http.Handler) http.Handler {
 			http.Error(w, "operator certificate missing access level", http.StatusForbidden)
 			return
 		}
-		id := Identity{CN: cert.Subject.CommonName, Serial: formatSerial(cert.SerialNumber), Level: level}
+		serial := formatSerial(cert.SerialNumber)
+		if revoker != nil && revoker.IsRevoked(serial) {
+			http.Error(w, "operator certificate revoked", http.StatusForbidden)
+			return
+		}
+		id := Identity{CN: cert.Subject.CommonName, Serial: serial, Level: level}
 		next.ServeHTTP(w, r.WithContext(NewContext(r.Context(), id)))
 	})
 }

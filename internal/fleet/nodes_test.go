@@ -34,6 +34,7 @@ import (
 	connect "connectrpc.com/connect"
 	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
 	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/nodeclient"
 	"github.com/CryptOS-PKI/manager/internal/store"
 	"github.com/CryptOS-PKI/manager/internal/store/memory"
 )
@@ -116,6 +117,21 @@ type fakeConn struct {
 	// importResp, when set, is returned by ImportCAKey instead of the
 	// zero-value response (it carries the restored identity).
 	importResp *cryptosv1.ImportCAKeyResponse
+
+	// gotRemoteResetCN records the confirmation CN RemoteReset was called with,
+	// so a decommission test can assert the handler relayed it unchanged.
+	gotRemoteResetCN string
+	// remoteResetErr, when set, is returned by RemoteReset (e.g. a gRPC
+	// PermissionDenied for a CN mismatch); remoteResetResp is the success reply.
+	remoteResetErr  error
+	remoteResetResp *cryptosv1.RemoteResetResponse
+
+	// gotCeremonyYAML records the config YAML StartCeremony was called with;
+	// ceremonyStream, when set, is the stream it returns (an adoption test
+	// feeds it a scripted event sequence). ceremonyErr fails StartCeremony.
+	gotCeremonyYAML []byte
+	ceremonyStream  nodeclient.CeremonyStream
+	ceremonyErr     error
 
 	// getConfigResp, when set, is returned by GetConfig instead of the
 	// zero-value response (the config-push flow fetches the node's baseline).
@@ -311,6 +327,27 @@ func (f *fakeConn) ImportCAKey(_ context.Context, envelope, passphrase []byte) (
 		return f.importResp, nil
 	}
 	return &cryptosv1.ImportCAKeyResponse{}, nil
+}
+
+func (f *fakeConn) RemoteReset(_ context.Context, confirmCN string) (*cryptosv1.RemoteResetResponse, error) {
+	f.record("RemoteReset")
+	f.gotRemoteResetCN = confirmCN
+	if f.remoteResetErr != nil {
+		return nil, f.remoteResetErr
+	}
+	if f.remoteResetResp != nil {
+		return f.remoteResetResp, nil
+	}
+	return &cryptosv1.RemoteResetResponse{Rebooting: true}, nil
+}
+
+func (f *fakeConn) StartCeremony(_ context.Context, _ cryptosv1.CeremonyKind, machineConfigYAML []byte) (nodeclient.CeremonyStream, error) {
+	f.record("StartCeremony")
+	f.gotCeremonyYAML = machineConfigYAML
+	if f.ceremonyErr != nil {
+		return nil, f.ceremonyErr
+	}
+	return f.ceremonyStream, nil
 }
 
 // record appends name to the shared call log, if this fake was given one.

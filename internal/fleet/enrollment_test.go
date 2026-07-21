@@ -30,6 +30,7 @@ import (
 	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
 	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
 	"github.com/CryptOS-PKI/manager/internal/authz"
+	"github.com/CryptOS-PKI/manager/internal/nodeclient"
 	"github.com/CryptOS-PKI/manager/internal/store"
 	"github.com/CryptOS-PKI/manager/internal/store/memory"
 )
@@ -624,6 +625,14 @@ func (r *routingConn) ExportCAKey(ctx context.Context, passphrase []byte) (*cryp
 
 func (r *routingConn) ImportCAKey(ctx context.Context, envelope, passphrase []byte) (*cryptosv1.ImportCAKeyResponse, error) {
 	return r.ferry.ImportCAKey(ctx, envelope, passphrase)
+}
+
+func (r *routingConn) RemoteReset(ctx context.Context, confirmCN string) (*cryptosv1.RemoteResetResponse, error) {
+	return r.identity.RemoteReset(ctx, confirmCN)
+}
+
+func (r *routingConn) StartCeremony(ctx context.Context, kind cryptosv1.CeremonyKind, machineConfigYAML []byte) (nodeclient.CeremonyStream, error) {
+	return r.identity.StartCeremony(ctx, kind, machineConfigYAML)
 }
 
 func (r *routingConn) Close() error {

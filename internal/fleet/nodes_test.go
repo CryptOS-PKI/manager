@@ -100,6 +100,23 @@ type fakeConn struct {
 	// instead of the zero-value response (it carries the adopted identity).
 	completeRotationResp *cryptosv1.CompleteKeyRotationResponse
 
+	// gotExportPassphrase records the passphrase ExportCAKey was called with,
+	// so an escrow test can assert the handler relayed it to the node and that
+	// the audit never contains it.
+	gotExportPassphrase []byte
+	// exportResp, when set, is returned by ExportCAKey instead of the
+	// zero-value response (it carries the encrypted envelope).
+	exportResp *cryptosv1.ExportCAKeyResponse
+
+	// gotImportEnvelope and gotImportPassphrase record the envelope and
+	// passphrase ImportCAKey was called with, so an escrow test can assert the
+	// handler relayed them to the node unchanged.
+	gotImportEnvelope   []byte
+	gotImportPassphrase []byte
+	// importResp, when set, is returned by ImportCAKey instead of the
+	// zero-value response (it carries the restored identity).
+	importResp *cryptosv1.ImportCAKeyResponse
+
 	// getConfigResp, when set, is returned by GetConfig instead of the
 	// zero-value response (the config-push flow fetches the node's baseline).
 	getConfigResp *cryptosv1.GetConfigResponse
@@ -271,6 +288,29 @@ func (f *fakeConn) IssueLeaf(_ context.Context, csrDER []byte, profileName strin
 		return f.issueResp, nil
 	}
 	return &cryptosv1.IssueLeafResponse{}, nil
+}
+
+func (f *fakeConn) ExportCAKey(_ context.Context, passphrase []byte) (*cryptosv1.ExportCAKeyResponse, error) {
+	f.gotExportPassphrase = passphrase
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.exportResp != nil {
+		return f.exportResp, nil
+	}
+	return &cryptosv1.ExportCAKeyResponse{}, nil
+}
+
+func (f *fakeConn) ImportCAKey(_ context.Context, envelope, passphrase []byte) (*cryptosv1.ImportCAKeyResponse, error) {
+	f.gotImportEnvelope = envelope
+	f.gotImportPassphrase = passphrase
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.importResp != nil {
+		return f.importResp, nil
+	}
+	return &cryptosv1.ImportCAKeyResponse{}, nil
 }
 
 // record appends name to the shared call log, if this fake was given one.

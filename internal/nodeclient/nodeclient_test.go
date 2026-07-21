@@ -89,6 +89,22 @@ func (fakeNodeService) ListRevocations(context.Context, *cryptosv1.ListRevocatio
 	}, nil
 }
 
+func (fakeNodeService) ExportCAKey(_ context.Context, req *cryptosv1.ExportCAKeyRequest) (*cryptosv1.ExportCAKeyResponse, error) {
+	// Echo the passphrase back inside the envelope so the test can assert the
+	// Client relayed it unchanged.
+	return &cryptosv1.ExportCAKeyResponse{
+		Envelope: append([]byte("envelope-for-"), req.GetPassphrase()...),
+	}, nil
+}
+
+func (fakeNodeService) ImportCAKey(_ context.Context, req *cryptosv1.ImportCAKeyRequest) (*cryptosv1.ImportCAKeyResponse, error) {
+	return &cryptosv1.ImportCAKeyResponse{
+		Identity: &cryptosv1.Identity{
+			ChainPem: "imported:" + string(req.GetEnvelope()) + ":" + string(req.GetPassphrase()),
+		},
+	}, nil
+}
+
 // testCA is a minimal self-signed CA used to mint both the fake node's
 // server cert and the test admin client cert.
 type testCA struct {
@@ -301,6 +317,22 @@ func TestDial_GetStatus_GetIdentity(t *testing.T) {
 	}
 	if got := configResp.GetConfig().GetRole().GetKind(); got != "fake-config-test-marker" {
 		t.Errorf("GetConfig().Config.Role.Kind = %q, want fake-config-test-marker", got)
+	}
+
+	exportResp, err := client.ExportCAKey(ctx, []byte("relayed-passphrase"))
+	if err != nil {
+		t.Fatalf("ExportCAKey() error = %v, want nil", err)
+	}
+	if got := string(exportResp.GetEnvelope()); got != "envelope-for-relayed-passphrase" {
+		t.Errorf("ExportCAKey().Envelope = %q, want envelope-for-relayed-passphrase (passphrase not relayed)", got)
+	}
+
+	importResp, err := client.ImportCAKey(ctx, []byte("env-bytes"), []byte("relayed-passphrase"))
+	if err != nil {
+		t.Fatalf("ImportCAKey() error = %v, want nil", err)
+	}
+	if got := importResp.GetIdentity().GetChainPem(); got != "imported:env-bytes:relayed-passphrase" {
+		t.Errorf("ImportCAKey().Identity.ChainPem = %q, want imported:env-bytes:relayed-passphrase (envelope/passphrase not relayed)", got)
 	}
 }
 

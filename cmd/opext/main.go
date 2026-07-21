@@ -35,11 +35,7 @@ import (
 // field is a Go []byte, which yaml.v3 decodes from a sequence of byte integers
 // (it does not base64-decode a scalar into []byte).
 func run(level string, w io.Writer) error {
-	l, err := authz.LevelFromToken(level)
-	if err != nil {
-		return err
-	}
-	value, err := authz.MarshalLevelValue(l)
+	_, value, err := authz.MarshalLevelExtension(level)
 	if err != nil {
 		return err
 	}

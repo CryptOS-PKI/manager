@@ -47,6 +47,13 @@ type Config struct {
 	// stays the default for offline dev and tests.
 	DatabaseURL string `yaml:"database_url"`
 
+	// OperatorCANode names the fleet node that acts as the operator CA:
+	// operator-credential issuance and revocation (S9) route there, and the
+	// manager fetches its revoked serials to enforce operator-cert revocation
+	// at the authz middleware. Empty disables operator-credential management
+	// and revocation enforcement.
+	OperatorCANode string `yaml:"operator_ca_node"`
+
 	Nodes []NodeCfg `yaml:"nodes"`
 }
 

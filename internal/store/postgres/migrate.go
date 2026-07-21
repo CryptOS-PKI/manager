@@ -43,6 +43,15 @@ var schemaSQL string
 const v2ProfilesSQL = `DROP TABLE IF EXISTS profiles;
 CREATE TABLE profiles (name text PRIMARY KEY, spec bytea NOT NULL);`
 
+// v3OperatorCredentialsSQL adds the operator_credentials table backing the S9
+// Operators surface: the durable metadata of every operator client cert the
+// manager issued via the operator-CA node (the manager never holds the key).
+const v3OperatorCredentialsSQL = `CREATE TABLE IF NOT EXISTS operator_credentials (
+  serial_hex text PRIMARY KEY, common_name text NOT NULL, level text NOT NULL,
+  not_after text NOT NULL, revoked boolean NOT NULL DEFAULT false,
+  issued_at timestamptz NOT NULL DEFAULT now()
+);`
+
 // migration is one ordered, idempotently-tracked schema step.
 type migration struct {
 	version string
@@ -54,6 +63,7 @@ type migration struct {
 var migrations = []migration{
 	{version: "v1", sql: schemaSQL},
 	{version: "v2", sql: v2ProfilesSQL},
+	{version: "v3", sql: v3OperatorCredentialsSQL},
 }
 
 // migrate applies every not-yet-applied migration in order, each tracked in a

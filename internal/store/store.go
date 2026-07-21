@@ -92,13 +92,29 @@ type Enrollment struct {
 	Profile            string // SUBORDINATE: issuing profile name (store-internal; no proto field)
 }
 
+// OperatorCredential is one operator client certificate the manager issued via
+// the operator-CA node. It is the durable record backing the Operators admin
+// surface: the manager never holds the operator's private key (browser-held),
+// only this metadata. It mirrors cryptos.fleet.v1.OperatorCredential.
+type OperatorCredential struct {
+	CommonName string
+	SerialHex  string
+	Level      string
+	NotAfter   string
+	Revoked    bool
+}
+
 // Store is the manager's read access to the fleet inventory and its
-// manager-owned catalog data (profiles, adapters, audit, enrollments).
+// manager-owned catalog data (profiles, adapters, audit, enrollments,
+// operator credentials).
 type Store interface {
 	// Nodes returns every node in the inventory.
 	Nodes() []Node
 	// Node returns the node with the given name, and whether it was found.
 	Node(name string) (Node, bool)
+	// AddNode inserts n into the inventory, replacing any node with the same
+	// name. It is how an adopted node joins the fleet.
+	AddNode(n Node)
 	// Profiles returns every certificate issuance profile.
 	Profiles() []Profile
 	// Profile returns the profile with the given name, and whether it was
@@ -135,6 +151,14 @@ type Store interface {
 	// Enrollment returns the enrollment request with the given ID, and
 	// whether it was found.
 	Enrollment(id string) (Enrollment, bool)
+	// OperatorCredentials returns every issued operator credential, in a
+	// stable order.
+	OperatorCredentials() []OperatorCredential
+	// AddOperatorCredential records a newly issued operator credential.
+	AddOperatorCredential(c OperatorCredential)
+	// MarkOperatorCredentialRevoked flags the credential with the given hex
+	// serial as revoked. It returns an error if no credential has that serial.
+	MarkOperatorCredentialRevoked(serialHex string) error
 }
 
 // HashEvent computes the chain hash for an audit event: the SHA-256, in hex, of

@@ -30,12 +30,13 @@ import (
 // Store is an in-memory, concurrency-safe store.Store backed by a fixed
 // snapshot of nodes and catalog data supplied at construction.
 type Store struct {
-	mu          sync.RWMutex
-	nodes       map[string]store.Node
-	profiles    []store.Profile
-	adapters    []store.Adapter
-	audit       []store.AuditEvent
-	enrollments []store.Enrollment
+	mu            sync.RWMutex
+	nodes         map[string]store.Node
+	profiles      []store.Profile
+	adapters      []store.Adapter
+	audit         []store.AuditEvent
+	enrollments   []store.Enrollment
+	operatorCreds []store.OperatorCredential
 }
 
 // New builds a Store from the given nodes, keyed by Node.Name, with an
@@ -83,6 +84,14 @@ func (s *Store) Node(name string) (store.Node, bool) {
 	n, ok := s.nodes[name]
 
 	return n, ok
+}
+
+// AddNode inserts n into the inventory, replacing any node with the same name.
+func (s *Store) AddNode(n store.Node) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.nodes[n.Name] = n
 }
 
 // Profiles returns every certificate issuance profile.
@@ -263,4 +272,40 @@ func (s *Store) UpdateEnrollment(id string, mutate func(*store.Enrollment)) erro
 	}
 
 	return fmt.Errorf("memory: enrollment %q not found", id)
+}
+
+// OperatorCredentials returns every issued operator credential in insertion
+// order.
+func (s *Store) OperatorCredentials() []store.OperatorCredential {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]store.OperatorCredential, len(s.operatorCreds))
+	copy(out, s.operatorCreds)
+
+	return out
+}
+
+// AddOperatorCredential records a newly issued operator credential.
+func (s *Store) AddOperatorCredential(c store.OperatorCredential) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.operatorCreds = append(s.operatorCreds, c)
+}
+
+// MarkOperatorCredentialRevoked flags the credential with the given hex serial
+// as revoked. It returns an error if no credential has that serial.
+func (s *Store) MarkOperatorCredentialRevoked(serialHex string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.operatorCreds {
+		if s.operatorCreds[i].SerialHex == serialHex {
+			s.operatorCreds[i].Revoked = true
+			return nil
+		}
+	}
+
+	return fmt.Errorf("memory: operator credential %q not found", serialHex)
 }

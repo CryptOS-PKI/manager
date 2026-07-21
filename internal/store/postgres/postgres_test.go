@@ -341,3 +341,45 @@ func TestSetAdapterEnabled_MissingErrors(t *testing.T) {
 		t.Fatal("SetAdapterEnabled(missing) returned nil, want error")
 	}
 }
+
+func TestOperatorCredentialsCRUD(t *testing.T) {
+	s := testStore(t)
+
+	if len(s.OperatorCredentials()) != 0 {
+		t.Fatalf("fresh store has %d operator credentials, want 0", len(s.OperatorCredentials()))
+	}
+
+	s.AddOperatorCredential(store.OperatorCredential{
+		CommonName: "op@acme.example", SerialHex: "0a1b", Level: "operator",
+		NotAfter: "2027-01-01T00:00:00Z",
+	})
+	s.AddOperatorCredential(store.OperatorCredential{
+		CommonName: "admin@acme.example", SerialHex: "0c2d", Level: "admin",
+		NotAfter: "2027-02-01T00:00:00Z",
+	})
+
+	creds := s.OperatorCredentials()
+	if len(creds) != 2 {
+		t.Fatalf("len(creds) = %d, want 2", len(creds))
+	}
+	if creds[0].SerialHex != "0a1b" || creds[0].Level != "operator" || creds[0].Revoked {
+		t.Errorf("creds[0] = %+v, want the operator row not revoked", creds[0])
+	}
+
+	if err := s.MarkOperatorCredentialRevoked("0a1b"); err != nil {
+		t.Fatalf("MarkOperatorCredentialRevoked: %v", err)
+	}
+	var revoked *store.OperatorCredential
+	for i := range s.OperatorCredentials() {
+		if c := s.OperatorCredentials()[i]; c.SerialHex == "0a1b" {
+			revoked = &c
+		}
+	}
+	if revoked == nil || !revoked.Revoked {
+		t.Fatalf("credential 0a1b not marked revoked: %+v", revoked)
+	}
+
+	if err := s.MarkOperatorCredentialRevoked("nope"); err == nil {
+		t.Fatal("MarkOperatorCredentialRevoked(unknown) = nil, want an error")
+	}
+}

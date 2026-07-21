@@ -84,6 +84,24 @@ func MarshalLevelValue(l Level) ([]byte, error) {
 	return asn1.Marshal(l.Token())
 }
 
+// MarshalLevelExtension returns the dotted OID and DER value of the
+// access-level extension for the given level token. It is the single encoding
+// used by both cmd/opext (which prints the value for a profile's
+// extra_extensions) and the operator-CA profile setup that stamps an
+// operator-<level> profile with the level extension. It errors if level is not
+// one of viewer|operator|admin.
+func MarshalLevelExtension(level string) (oid string, der []byte, err error) {
+	l, err := LevelFromToken(level)
+	if err != nil {
+		return "", nil, err
+	}
+	value, err := MarshalLevelValue(l)
+	if err != nil {
+		return "", nil, err
+	}
+	return AccessLevelOID, value, nil
+}
+
 // LevelFromCertificate reads the access-level extension off cert and decodes
 // the level. It errors if the extension is absent or unparseable.
 func LevelFromCertificate(cert *x509.Certificate) (Level, error) {

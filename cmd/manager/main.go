@@ -31,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"runtime/debug"
+	"time"
 
 	fleetv1connect "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1/fleetv1connect"
 	"github.com/CryptOS-PKI/manager/internal/authz"
@@ -67,6 +68,17 @@ func main() {
 		}
 	}
 	profiles, adapters, audit, enrollments := seed.Catalog()
+
+	// When an operator-CA node is configured, seed the three operator-<level>
+	// issuing profiles into the catalog so an admin can push them to that node
+	// (via ApplyProfileToNode) and S9 issuance can route to them.
+	if cfg.OperatorCANode != "" {
+		opProfiles, err := fleet.OperatorProfiles()
+		if err != nil {
+			log.Fatalf("manager: build operator profiles: %v", err)
+		}
+		profiles = append(profiles, opProfiles...)
+	}
 
 	var st store.Store
 	if cfg.DatabaseURL == "" {
@@ -110,6 +122,17 @@ func main() {
 	}
 	svc = svc.WithEnrollment(pemDial, operatorCAPEM)
 
+	// S9: route operator-credential issuance/revocation to the configured
+	// operator-CA node. S10: supply the TOFU preview + pinned maintenance dial
+	// seams for node adoption.
+	svc = svc.WithOperatorCA(cfg.OperatorCANode)
+	svc = svc.WithAdoption(
+		nodeclient.FetchMaintenanceCert,
+		func(endpoint, pinnedSHA256 string) (fleet.NodeConn, error) {
+			return nodeclient.DialMaintenance(endpoint, pinnedSHA256)
+		},
+	)
+
 	path, handler := fleetv1connect.NewFleetServiceHandler(svc)
 
 	mux := http.NewServeMux()
@@ -121,10 +144,42 @@ func main() {
 	}
 	mux.Handle("/", web)
 
+	// S9 revocation enforcement: when an operator-CA node is configured, the
+	// manager periodically fetches its revoked serials and the mTLS middleware
+	// denies a client whose cert serial is revoked. The cache is fail-safe: a
+	// failed refresh keeps the last-good set (a transient operator-CA outage
+	// never locks everyone out). Enforcement runs only on the real mTLS path,
+	// not the h2c dev bypass.
+	var revocationCache *authz.RevocationCache
+	if !cfg.AuthBypass {
+		if src := svc.OperatorRevocationSource(); src != nil {
+			revocationCache = authz.NewRevocationCache(src)
+			// Prime the cache synchronously before serving so revocation is
+			// enforced on the very first request. Without this the initial
+			// refresh races the listener and a revoked cert could slip through
+			// a cold-start window. A prime failure is non-fatal (fail-safe on a
+			// transient operator-CA outage) but loudly warns that enforcement is
+			// not yet active until the periodic refresh succeeds.
+			if err := revocationCache.Prime(); err != nil {
+				log.Printf("manager: WARNING operator-CA revocation NOT YET ENFORCED — priming from node %q failed: %v; revoked operator certs may be accepted until the first successful refresh", cfg.OperatorCANode, err)
+			}
+			go revocationCache.Run(context.Background(), 60*time.Second)
+			log.Printf("manager: enforcing operator-CA revocation via node %q", cfg.OperatorCANode)
+		} else {
+			log.Printf("manager: no operator_ca_node configured, operator-cert revocation not enforced")
+		}
+	}
+
 	// Auth is HTTP middleware, not a Connect interceptor: only the HTTP layer
 	// sees the TLS peer certificate. Bypass injects a dev identity over h2c;
-	// the real path verifies the client cert the TLS listener required.
+	// the real path verifies the client cert the TLS listener required and
+	// (when configured) denies a revoked serial.
 	authMW := authz.ClientCertMiddleware
+	if revocationCache != nil {
+		authMW = func(next http.Handler) http.Handler {
+			return authz.ClientCertMiddlewareWithRevocation(revocationCache, next)
+		}
+	}
 	if cfg.AuthBypass {
 		authMW = authz.BypassMiddleware
 	}

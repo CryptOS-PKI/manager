@@ -25,3 +25,8 @@ CREATE TABLE IF NOT EXISTS enrollments (
   pinned_key_sha256 text NOT NULL, attestation_ok boolean NOT NULL,
   profile text NOT NULL
 );
+CREATE TABLE IF NOT EXISTS operator_credentials (
+  serial_hex text PRIMARY KEY, common_name text NOT NULL, level text NOT NULL,
+  not_after text NOT NULL, revoked boolean NOT NULL DEFAULT false,
+  issued_at timestamptz NOT NULL DEFAULT now()
+);

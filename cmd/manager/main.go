@@ -154,6 +154,15 @@ func main() {
 	if !cfg.AuthBypass {
 		if src := svc.OperatorRevocationSource(); src != nil {
 			revocationCache = authz.NewRevocationCache(src)
+			// Prime the cache synchronously before serving so revocation is
+			// enforced on the very first request. Without this the initial
+			// refresh races the listener and a revoked cert could slip through
+			// a cold-start window. A prime failure is non-fatal (fail-safe on a
+			// transient operator-CA outage) but loudly warns that enforcement is
+			// not yet active until the periodic refresh succeeds.
+			if err := revocationCache.Prime(); err != nil {
+				log.Printf("manager: WARNING operator-CA revocation NOT YET ENFORCED — priming from node %q failed: %v; revoked operator certs may be accepted until the first successful refresh", cfg.OperatorCANode, err)
+			}
 			go revocationCache.Run(context.Background(), 60*time.Second)
 			log.Printf("manager: enforcing operator-CA revocation via node %q", cfg.OperatorCANode)
 		} else {

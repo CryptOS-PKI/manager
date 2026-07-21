@@ -81,14 +81,21 @@ func (c *RevocationCache) IsRevoked(serial string) bool {
 	return ok
 }
 
-// Run refreshes the cache immediately, then on every interval tick until ctx is
-// cancelled. A refresh error is logged (not fatal): the last-good set stays in
-// force so a transient operator-CA outage never locks everyone out. Intended to
-// run in its own goroutine.
+// Prime performs a single synchronous refresh. Call it before the server starts
+// serving so revocation is enforced on the very first request rather than after
+// the background loop's first tick; a cold, unprimed cache reports nothing
+// revoked. It returns the refresh error (fail-safe: the caller treats a prime
+// failure as non-fatal but should warn that enforcement is not yet active).
+func (c *RevocationCache) Prime() error {
+	return c.Refresh()
+}
+
+// Run refreshes the cache on every interval tick until ctx is cancelled. The
+// caller should Prime once before serving; Run itself does not do an initial
+// refresh. A tick refresh error is logged (not fatal): the last-good set stays
+// in force so a transient operator-CA outage never locks everyone out. Intended
+// to run in its own goroutine.
 func (c *RevocationCache) Run(ctx context.Context, interval time.Duration) {
-	if err := c.Refresh(); err != nil {
-		log.Printf("authz: initial revocation refresh failed (keeping empty set): %v", err)
-	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {

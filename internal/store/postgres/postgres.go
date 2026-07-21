@@ -104,6 +104,21 @@ func (s *Store) Node(name string) (store.Node, bool) {
 	return n, true
 }
 
+// AddNode inserts n into the inventory, replacing any node with the same name
+// (an adopted node re-registering keeps the latest endpoint/role).
+func (s *Store) AddNode(n store.Node) {
+	if _, err := s.pool.Exec(bg(),
+		`INSERT INTO nodes (name, endpoint, role, admin_cert, admin_key, ca_cert)
+		 VALUES ($1, $2, $3, $4, $5, $6)
+		 ON CONFLICT (name) DO UPDATE SET
+		   endpoint = EXCLUDED.endpoint, role = EXCLUDED.role,
+		   admin_cert = EXCLUDED.admin_cert, admin_key = EXCLUDED.admin_key,
+		   ca_cert = EXCLUDED.ca_cert`,
+		n.Name, n.Endpoint, n.Role, n.AdminCert, n.AdminKey, n.CACert); err != nil {
+		panic(fmt.Sprintf("postgres: insert node %q: %v", n.Name, err))
+	}
+}
+
 // Profiles returns every certificate issuance profile.
 func (s *Store) Profiles() []store.Profile {
 	rows, err := s.pool.Query(bg(),
@@ -362,6 +377,56 @@ func (s *Store) AddAuditEvent(e store.AuditEvent) store.AuditEvent {
 		panic(fmt.Sprintf("postgres: commit audit append: %v", err))
 	}
 	return e
+}
+
+// OperatorCredentials returns every issued operator credential, oldest first.
+func (s *Store) OperatorCredentials() []store.OperatorCredential {
+	rows, err := s.pool.Query(bg(),
+		`SELECT common_name, serial_hex, level, not_after, revoked
+		 FROM operator_credentials ORDER BY issued_at, serial_hex`)
+	if err != nil {
+		panic(fmt.Sprintf("postgres: query operator_credentials: %v", err))
+	}
+	defer rows.Close()
+
+	out := make([]store.OperatorCredential, 0)
+	for rows.Next() {
+		var c store.OperatorCredential
+		if err := rows.Scan(&c.CommonName, &c.SerialHex, &c.Level, &c.NotAfter, &c.Revoked); err != nil {
+			panic(fmt.Sprintf("postgres: scan operator credential: %v", err))
+		}
+		out = append(out, c)
+	}
+	if err := rows.Err(); err != nil {
+		panic(fmt.Sprintf("postgres: iterate operator_credentials: %v", err))
+	}
+	return out
+}
+
+// AddOperatorCredential records a newly issued operator credential. A serial
+// collision is a hard error (serials are unique per operator CA), surfaced via
+// the store's panic-on-error contract.
+func (s *Store) AddOperatorCredential(c store.OperatorCredential) {
+	if _, err := s.pool.Exec(bg(),
+		`INSERT INTO operator_credentials (serial_hex, common_name, level, not_after, revoked)
+		 VALUES ($1, $2, $3, $4, $5)`,
+		c.SerialHex, c.CommonName, c.Level, c.NotAfter, c.Revoked); err != nil {
+		panic(fmt.Sprintf("postgres: insert operator credential %q: %v", c.SerialHex, err))
+	}
+}
+
+// MarkOperatorCredentialRevoked flags the credential with the given hex serial
+// as revoked. It returns an error if no credential has that serial.
+func (s *Store) MarkOperatorCredentialRevoked(serialHex string) error {
+	tag, err := s.pool.Exec(bg(),
+		`UPDATE operator_credentials SET revoked = true WHERE serial_hex = $1`, serialHex)
+	if err != nil {
+		return fmt.Errorf("postgres: revoke operator credential %q: %w", serialHex, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("postgres: operator credential %q not found", serialHex)
+	}
+	return nil
 }
 
 // SeedIfEmpty inserts the given catalog only when every target table is empty,

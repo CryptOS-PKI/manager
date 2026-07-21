@@ -23,8 +23,11 @@ limitations under the License.
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
+	"strings"
 
 	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
 	"github.com/CryptOS-PKI/manager/internal/store"
@@ -96,6 +99,77 @@ func DialPEM(endpoint, certPEM, keyPEM, caPEM string) (*Client, error) {
 		conn: conn,
 		node: cryptosv1.NewNodeServiceClient(conn),
 	}, nil
+}
+
+// FetchMaintenanceCert performs a bare TLS handshake against a not-yet-adopted
+// node's maintenance endpoint and returns the presented leaf certificate's
+// SHA-256 (lowercase hex) and subject. It is the trust-on-first-use preview:
+// server verification is skipped because the operator will confirm the
+// fingerprint out of band; nothing is sent to the endpoint beyond the
+// handshake, and no client cert is presented.
+func FetchMaintenanceCert(endpoint string) (certSHA256, subject string, err error) {
+	conn, err := tls.Dial("tcp", endpoint, &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // TOFU preview: the operator confirms the returned fingerprint out of band.
+		MinVersion:         tls.VersionTLS12,
+	})
+	if err != nil {
+		return "", "", fmt.Errorf("nodeclient: preview dial %s: %w", endpoint, err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "", "", fmt.Errorf("nodeclient: preview %s presented no certificate", endpoint)
+	}
+	sum := sha256.Sum256(certs[0].Raw)
+	return hex.EncodeToString(sum[:]), certs[0].Subject.String(), nil
+}
+
+// DialMaintenance opens a gRPC connection to a not-yet-adopted node's
+// maintenance endpoint, trust-on-first-use pinned to pinnedSHA256. The
+// maintenance surface is unauthenticated (no client cert) and serves an
+// ephemeral self-signed cert, so this relaxes the CA/hostname check
+// (InsecureSkipVerify) but installs a VerifyConnection callback that fails the
+// handshake unless the presented leaf certificate's SHA-256 equals the
+// operator-confirmed pin. That is the whole trust boundary for adoption: no
+// admin or client secret is ever presented to an unpinned endpoint.
+func DialMaintenance(endpoint, pinnedSHA256 string) (*Client, error) {
+	pin := normalizeFingerprint(pinnedSHA256)
+	if pin == "" {
+		return nil, fmt.Errorf("nodeclient: maintenance dial requires a non-empty pinned SHA-256")
+	}
+
+	tlsCfg := &tls.Config{
+		InsecureSkipVerify: true, //nolint:gosec // TOFU: the VerifyConnection callback below pins the exact leaf cert by SHA-256.
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 {
+				return fmt.Errorf("nodeclient: maintenance endpoint presented no certificate")
+			}
+			got := sha256.Sum256(cs.PeerCertificates[0].Raw)
+			if hex.EncodeToString(got[:]) != pin {
+				return fmt.Errorf("nodeclient: maintenance cert fingerprint does not match the pinned value")
+			}
+			return nil
+		},
+		MinVersion: tls.VersionTLS12,
+	}
+
+	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	if err != nil {
+		return nil, fmt.Errorf("nodeclient: dial maintenance %s: %w", endpoint, err)
+	}
+
+	return &Client{
+		conn: conn,
+		node: cryptosv1.NewNodeServiceClient(conn),
+	}, nil
+}
+
+// normalizeFingerprint folds a SHA-256 hex fingerprint to a comparable form:
+// lowercase with any colon separators and surrounding whitespace stripped.
+func normalizeFingerprint(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	return strings.ReplaceAll(s, ":", "")
 }
 
 // GetStatus returns the node's current status.
@@ -185,6 +259,30 @@ func (c *Client) IssueLeaf(ctx context.Context, csrDER []byte, profileName strin
 	return c.node.IssueLeaf(ctx, &cryptosv1.IssueLeafRequest{
 		CsrDer:      csrDER,
 		ProfileName: profileName,
+	})
+}
+
+// RemoteReset asks the dialed node to perform the destructive decommission
+// wipe over its mTLS surface. confirmCN must equal the node's current Root CA
+// CN or the node refuses (PermissionDenied); on success the node wipes its
+// identity and data and reboots into maintenance.
+func (c *Client) RemoteReset(ctx context.Context, confirmCN string) (*cryptosv1.RemoteResetResponse, error) {
+	return c.node.RemoteReset(ctx, &cryptosv1.RemoteResetRequest{ConfirmCommonName: confirmCN})
+}
+
+// CeremonyStream is the receive side of a StartCeremony server stream, narrowed
+// to what the adoption orchestrator consumes so it can be faked in tests.
+type CeremonyStream interface {
+	Recv() (*cryptosv1.StartCeremonyResponse, error)
+}
+
+// StartCeremony drives the node's first-boot ceremony, applying the operator's
+// machine config (YAML) and streaming the ceremony events back. It is used
+// during adoption once the node is reachable on the maintenance endpoint.
+func (c *Client) StartCeremony(ctx context.Context, kind cryptosv1.CeremonyKind, machineConfigYAML []byte) (CeremonyStream, error) {
+	return c.node.StartCeremony(ctx, &cryptosv1.StartCeremonyRequest{
+		Kind:              kind,
+		MachineConfigYaml: machineConfigYAML,
 	})
 }
 

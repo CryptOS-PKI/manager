@@ -1,0 +1,325 @@
+package fleet
+
+/*
+Apache License 2.0
+
+Copyright 2026 Shane
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"time"
+
+	connect "connectrpc.com/connect"
+	fleetv1 "github.com/CryptOS-PKI/api/go/cryptos/fleet/v1"
+	cryptosv1 "github.com/CryptOS-PKI/api/go/cryptos/v1"
+	"github.com/CryptOS-PKI/manager/internal/store"
+	"google.golang.org/protobuf/encoding/protojson"
+)
+
+// Adoption phase tokens streamed on AdoptNodeResponse.phase.
+const (
+	phaseApplyingConfig = "applying-config"
+	phaseInstalling     = "installing"
+	phaseAwaitingReboot = "awaiting-reboot"
+	phaseCeremony       = "ceremony"
+	phaseEstablished    = "established"
+	phaseError          = "error"
+)
+
+// rebootWait bounds how long AdoptNode waits for a rebooting node to come back
+// on the maintenance endpoint before streaming an error phase. It is a var so
+// tests can shrink it; the reboot poll never blocks the stream indefinitely.
+var (
+	rebootWait      = 90 * time.Second
+	rebootPollGap   = 3 * time.Second
+	rebootPollGrace = 1 * time.Second
+)
+
+// phaseSink receives each streamed adoption phase. The Connect handler sends it
+// on the wire; tests collect it in a slice. Returning an error aborts the
+// orchestration (e.g. the client hung up).
+type phaseSink func(phase, detail string, done bool) error
+
+// PreviewAdoption performs the trust-on-first-use preview: it dials the given
+// maintenance endpoint (no pin, no client cert), captures the presented cert,
+// and returns its SHA-256 fingerprint and subject for the operator to confirm.
+// It is admin-gated and a read, so it dials no inventory node and writes no
+// audit event.
+func (s *Service) PreviewAdoption(ctx context.Context, req *connect.Request[fleetv1.PreviewAdoptionRequest]) (*connect.Response[fleetv1.PreviewAdoptionResponse], error) {
+	if err := requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	if s.previewCert == nil {
+		return nil, connect.NewError(connect.CodeUnimplemented, errors.New("fleet: adoption not configured"))
+	}
+	endpoint := req.Msg.GetEndpoint()
+	if endpoint == "" {
+		return nil, connect.NewError(connect.CodeInvalidArgument, errors.New("fleet: endpoint is required"))
+	}
+
+	sha256Hex, subject, err := s.previewCert(endpoint)
+	if err != nil {
+		return nil, connect.NewError(connect.CodeUnavailable, fmt.Errorf("fleet: preview adoption: %w", err))
+	}
+
+	return connect.NewResponse(&fleetv1.PreviewAdoptionResponse{
+		CertSha256: sha256Hex,
+		Subject:    subject,
+	}), nil
+}
+
+// AdoptNode provisions a not-yet-adopted maintenance node end to end and streams
+// progress. It is admin-gated. Pinned to the fingerprint the operator confirmed
+// via PreviewAdoption, it dials the maintenance endpoint (TOFU, no client
+// secret to an unpinned endpoint), applies the initial config, waits a bounded
+// time for the node to reboot back onto the maintenance endpoint, drives the
+// first-boot ceremony while relaying its events, and on COMPLETE registers the
+// node in the inventory and audits "node-adopted". Every step is a streamed
+// phase so partial progress is visible; a reboot that never returns streams an
+// error phase rather than hanging.
+func (s *Service) AdoptNode(ctx context.Context, req *connect.Request[fleetv1.AdoptNodeRequest], stream *connect.ServerStream[fleetv1.AdoptNodeResponse]) error {
+	if err := requireAdmin(ctx); err != nil {
+		return err
+	}
+	sink := func(phase, detail string, done bool) error {
+		return stream.Send(&fleetv1.AdoptNodeResponse{Phase: phase, Detail: detail, Done: done})
+	}
+	return s.runAdoption(ctx, req.Msg, sink)
+}
+
+// runAdoption is the transport-independent adoption orchestration, driving the
+// phaseSink so the Connect handler and tests share one code path. A step that
+// fails streams an error phase (done) and returns a Connect error; it never
+// hangs — the reboot wait is bounded.
+func (s *Service) runAdoption(ctx context.Context, msg *fleetv1.AdoptNodeRequest, send phaseSink) error {
+	if s.dialMaintenance == nil {
+		return connect.NewError(connect.CodeUnimplemented, errors.New("fleet: adoption not configured"))
+	}
+	endpoint := msg.GetEndpoint()
+	pin := msg.GetPinnedCertSha256()
+	cfg := msg.GetConfig()
+	if endpoint == "" || pin == "" {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("fleet: endpoint and pinned_cert_sha256 are required"))
+	}
+	if cfg == nil {
+		return connect.NewError(connect.CodeInvalidArgument, errors.New("fleet: config is required"))
+	}
+
+	// Apply the initial config on the pinned maintenance endpoint.
+	if err := send(phaseApplyingConfig, "dialing maintenance endpoint and applying initial config", false); err != nil {
+		return err
+	}
+	conn, err := s.dialMaintenance(endpoint, pin)
+	if err != nil {
+		return s.adoptFail(send, connect.CodeUnavailable, fmt.Errorf("fleet: dial maintenance: %w", err))
+	}
+	applied, err := conn.ApplyConfig(ctx, cfg)
+	if err != nil {
+		_ = conn.Close()
+		return s.adoptFail(send, connect.CodeInternal, fmt.Errorf("fleet: apply config: %w", err))
+	}
+	_ = conn.Close()
+
+	if err := send(phaseInstalling, "config applied, node installing", false); err != nil {
+		return err
+	}
+
+	// If the node needs a reboot to install, wait a bounded time for it to come
+	// back on the maintenance endpoint. This is the reboot-gap the plan flags:
+	// the node reboots into a no-identity state still on the maintenance
+	// endpoint, where the ceremony then runs.
+	if applied.GetRequiresReboot() {
+		if err := send(phaseAwaitingReboot, "waiting for the node to reboot", false); err != nil {
+			return err
+		}
+		rebootedConn, err := s.awaitMaintenanceReboot(ctx, endpoint, pin)
+		if err != nil {
+			return s.adoptFail(send, connect.CodeDeadlineExceeded, err)
+		}
+		conn = rebootedConn
+	} else {
+		conn, err = s.dialMaintenance(endpoint, pin)
+		if err != nil {
+			return s.adoptFail(send, connect.CodeUnavailable, fmt.Errorf("fleet: re-dial maintenance: %w", err))
+		}
+	}
+	defer func() { _ = conn.Close() }()
+
+	// Drive the first-boot ceremony, relaying each event as a ceremony phase.
+	if err := send(phaseCeremony, "starting first-boot ceremony", false); err != nil {
+		return err
+	}
+	yaml, err := marshalConfigYAML(cfg)
+	if err != nil {
+		return s.adoptFail(send, connect.CodeInternal, fmt.Errorf("fleet: marshal config: %w", err))
+	}
+	cstream, err := conn.StartCeremony(ctx, cryptosv1.CeremonyKind_CEREMONY_KIND_FIRST_BOOT_ROOT, yaml)
+	if err != nil {
+		return s.adoptFail(send, connect.CodeInternal, fmt.Errorf("fleet: start ceremony: %w", err))
+	}
+	complete, err := relayCeremony(cstream, send)
+	if err != nil {
+		return s.adoptFail(send, connect.CodeInternal, err)
+	}
+	if !complete {
+		return s.adoptFail(send, connect.CodeInternal, errors.New("fleet: ceremony stream ended before completing"))
+	}
+
+	// Register the node so it appears in the inventory. Managed mTLS admin
+	// material is attached afterward via the LINK enrollment path (the ceremony
+	// rotates the node's admin cert; the operator links it with that material),
+	// so the inventory entry carries the endpoint and role now.
+	s.registerAdoptedNode(cfg, endpoint)
+
+	s.store.AddAuditEvent(store.AuditEvent{
+		ID:         newAuditID(),
+		At:         time.Now().UTC().Format(time.RFC3339),
+		Kind:       "node-adopted",
+		Summary:    fmt.Sprintf("Adopted node %s at %s", adoptedNodeName(cfg, endpoint), endpoint),
+		TargetKind: "node",
+		TargetPath: "/nodes/" + adoptedNodeName(cfg, endpoint),
+	})
+
+	return send(phaseEstablished, "node adopted and established", true)
+}
+
+// awaitMaintenanceReboot polls the maintenance endpoint until it accepts a
+// pinned connection again or the bounded rebootWait elapses. It gives the node
+// a grace period to begin shutting down before the first poll so a still-up
+// pre-reboot listener is not mistaken for the rebooted one.
+func (s *Service) awaitMaintenanceReboot(ctx context.Context, endpoint, pin string) (NodeConn, error) {
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-time.After(rebootPollGrace):
+	}
+
+	deadline := time.Now().Add(rebootWait)
+	for {
+		conn, err := s.dialMaintenance(endpoint, pin)
+		if err == nil {
+			// A lazy gRPC client dial can succeed before the server is up;
+			// confirm the node answers a cheap RPC before proceeding.
+			if _, serr := conn.GetStatus(ctx); serr == nil {
+				return conn, nil
+			}
+			_ = conn.Close()
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("fleet: node did not return on %s within %s of reboot", endpoint, rebootWait)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(rebootPollGap):
+		}
+	}
+}
+
+// adoptFail streams a terminal error phase and returns the Connect error, so a
+// failed adoption always leaves a visible last phase instead of a bare aborted
+// stream.
+func (s *Service) adoptFail(send phaseSink, code connect.Code, cause error) error {
+	_ = send(phaseError, cause.Error(), true)
+	return connect.NewError(code, cause)
+}
+
+// relayCeremony forwards every ceremony event as a ceremony phase and reports
+// whether the stream reached COMPLETE. io.EOF ends the stream cleanly.
+func relayCeremony(stream interface {
+	Recv() (*cryptosv1.StartCeremonyResponse, error)
+}, send phaseSink) (complete bool, err error) {
+	for {
+		msg, rerr := stream.Recv()
+		if errors.Is(rerr, io.EOF) {
+			return complete, nil
+		}
+		if rerr != nil {
+			return complete, fmt.Errorf("fleet: ceremony stream: %w", rerr)
+		}
+		ev := msg.GetEvent()
+		if ev.GetKind() == cryptosv1.CeremonyEventKind_CEREMONY_EVENT_KIND_COMPLETE {
+			complete = true
+		}
+		if serr := send(phaseCeremony, ceremonyEventDetail(ev.GetKind()), false); serr != nil {
+			return complete, serr
+		}
+	}
+}
+
+// ceremonyEventDetail renders a ceremony event kind as an operator-facing
+// detail string.
+func ceremonyEventDetail(kind cryptosv1.CeremonyEventKind) string {
+	switch kind {
+	case cryptosv1.CeremonyEventKind_CEREMONY_EVENT_KIND_KEY_CREATED:
+		return "key created"
+	case cryptosv1.CeremonyEventKind_CEREMONY_EVENT_KIND_CERT_SIGNED:
+		return "certificate signed"
+	case cryptosv1.CeremonyEventKind_CEREMONY_EVENT_KIND_MANIFEST_WRITTEN:
+		return "ceremony manifest written"
+	case cryptosv1.CeremonyEventKind_CEREMONY_EVENT_KIND_ADMIN_ROTATED:
+		return "admin credential rotated"
+	case cryptosv1.CeremonyEventKind_CEREMONY_EVENT_KIND_COMPLETE:
+		return "ceremony complete"
+	default:
+		return "ceremony in progress"
+	}
+}
+
+// registerAdoptedNode adds the adopted node to the inventory if it is not
+// already present, keyed by the config's metadata name (falling back to the
+// endpoint). It carries the endpoint and role; managed mTLS material is
+// attached later via the LINK enrollment path.
+func (s *Service) registerAdoptedNode(cfg *cryptosv1.MachineConfig, endpoint string) {
+	name := adoptedNodeName(cfg, endpoint)
+	if _, ok := s.store.Node(name); ok {
+		return
+	}
+	s.store.AddNode(store.Node{
+		Name:     name,
+		Endpoint: endpoint,
+		Role:     adoptedNodeRole(cfg),
+	})
+}
+
+// adoptedNodeName derives the inventory name for an adopted node from its
+// config's metadata name, falling back to the endpoint when the config omits
+// it.
+func adoptedNodeName(cfg *cryptosv1.MachineConfig, endpoint string) string {
+	if n := cfg.GetMetadata().GetName(); n != "" {
+		return n
+	}
+	return endpoint
+}
+
+// adoptedNodeRole derives a display role from the config's role kind, defaulting
+// to "node" when the config omits it.
+func adoptedNodeRole(cfg *cryptosv1.MachineConfig) string {
+	if r := cfg.GetRole().GetKind(); r != "" {
+		return r
+	}
+	return "node"
+}
+
+// marshalConfigYAML renders a MachineConfig for the node's StartCeremony, which
+// accepts the config as YAML/JSON bytes and parses it server-side. protojson is
+// deterministic and the node parses it the same as YAML.
+func marshalConfigYAML(cfg *cryptosv1.MachineConfig) ([]byte, error) {
+	return protojson.Marshal(cfg)
+}

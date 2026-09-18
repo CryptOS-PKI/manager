@@ -133,8 +133,14 @@ bytes — `0x13` is ASN.1 `PrintableString`, `0x05` its length:
 # op-admin.ext
 extendedKeyUsage = clientAuth
 keyUsage = critical, digitalSignature
+basicConstraints = critical, CA:FALSE
 1.3.6.1.4.1.59999.1.1 = DER:13:05:61:64:6D:69:6E
 ```
+
+`basicConstraints` matters: without it `openssl x509 -req -extfile` emits a v3
+certificate carrying **no** basic constraints extension at all, which is not what the
+cryptos profile path produces for a leaf and not what you want an operator credential to
+look like. Pin it to `CA:FALSE` explicitly.
 
 | Level | DER | `opext` bytes |
 | --- | --- | --- |
@@ -173,8 +179,8 @@ work":
 | `operator_ca_node` | enables operator-cert revocation checking |
 
 Everything else — `listen`, `corsOrigins`, `authBypass`, `tlsCert`, `tlsKey`,
-`operatorCAPath`, `nodes[].adminCertPath`, `nodes[].adminKeyPath`,
-`nodes[].caCertPath` — is camelCase.
+`operatorCAPath`, `httpRedirectListen`, `httpsPublicPort`, `nodes[].adminCertPath`,
+`nodes[].adminKeyPath`, `nodes[].caCertPath` — is camelCase.
 
 If `operator_ca_node` is unset the manager starts and logs:
 
@@ -189,6 +195,11 @@ working until you set it.
 
 ```yaml
 listen: "0.0.0.0:443"
+
+# Plaintext listener that only redirects to HTTPS, so an operator who types the
+# hostname without a scheme reaches the login page instead of a refused
+# connection. Omit it to disable the listener entirely.
+httpRedirectListen: "0.0.0.0:80"
 
 authBypass: false
 tlsCert: "/etc/ssl/certs/fm.acme.example.fullchain.pem"
@@ -238,8 +249,9 @@ separate and more powerful thing.
 
 ## 6. systemd unit
 
-The manager binds 443, which is privileged. Grant the one capability rather
-than running as root:
+The manager binds 443, and 80 as well when `httpRedirectListen` is set. Both are
+privileged. Grant the one capability rather than running as root -- it covers both
+ports:
 
 ```ini
 [Unit]
@@ -309,31 +321,103 @@ sudo chmod 640 /etc/ssl/private/fm.acme.example.key
 
 ## 7. Verify without a browser
 
-Prove the mTLS listener end to end before fighting keystore imports:
+Prove the listener end to end before fighting keystore imports. **Read this section
+rather than reusing an older copy of it:** the web surface is now served without a client
+certificate on purpose, so "the page loaded without a cert" is no longer evidence of a
+misconfiguration. The gate moved to the API.
 
 ```sh
-# Expect HTTP 200 and the SPA.
-curl -sS --cert operator-admin.crt --key operator-admin.key \
-  --cacert acme-ca-chain.pem https://fm.acme.example/ -o /dev/null -w '%{http_code}\n'
+FM=https://fm.acme.example
+API=$FM/cryptos.fleet.v1.FleetService/WhoAmI
 
-# Negative control — no client cert must be REFUSED, not served.
-curl -sS --cacert acme-ca-chain.pem https://fm.acme.example/ -o /dev/null -w '%{http_code}\n'
+# 1. The web surface, with no client certificate. Expect 200 — by design.
+curl -sS --cacert acme-ca-chain.pem $FM/ -o /dev/null -w '%{http_code}\n'
+
+# 2. NEGATIVE CONTROL. The API with no client certificate must be 401.
+curl -sS --cacert acme-ca-chain.pem -X POST -H 'Content-Type: application/json' \
+  -d '{}' $API -w '\n%{http_code}\n'
+
+# 3. The API with your operator certificate. Expect 200 and your own identity,
+#    which also proves the level extension from section 3 parsed.
+curl -sS --cacert acme-ca-chain.pem --cert operator-admin.crt --key operator-admin.key \
+  -X POST -H 'Content-Type: application/json' -d '{}' $API -w '\n%{http_code}\n'
+
+# 4. NEGATIVE CONTROL. A certificate from any other CA must fail the HANDSHAKE,
+#    not merely be refused by the API. Expect a TLS error and no HTTP status.
+curl -sS --cacert acme-ca-chain.pem --cert /tmp/unrelated.crt --key /tmp/unrelated.key \
+  $FM/ -o /dev/null -w '%{http_code}\n'
+
+# 5. The redirect. Expect 307 and a Location on https, path and query intact.
+curl -sS -o /dev/null -D - http://fm.acme.example/fleet | grep -iE 'HTTP/|location'
 ```
 
-If the second command succeeds you have `authBypass: true` somewhere, and your
-management plane is open to anyone who can reach the port.
+Expected, verified against the built binary:
 
-## 8. Serving CA certificates and CRLs — use plain HTTP
+| # | Expected |
+| --- | --- |
+| 1 | `200` — the SPA serves anonymously so an operator with no certificate can be *told* that |
+| 2 | `401` with body `client certificate required` — **this** is the negative control |
+| 3 | `200` and `{"operator":{"cn":"you@acme.example","serial":"...","level":"admin"}}` |
+| 4 | a TLS error and `000` for the status — here `alert unknown ca`, though the exact curl message and exit code vary by curl and OpenSSL build. The server logs `tls: failed to verify certificate: x509: certificate signed by unknown authority` |
+| 5 | `307 Temporary Redirect`, `Location: https://fm.acme.example/fleet` |
 
-A distribution point for your root/intermediate certificates and CRLs (for
-domain-join trust rollout, AIA, and CDP) must be served over **`http://`, not
-`https://`**. AIA and CDP URLs are fetched by clients that are in the middle of
-*building* the trust path, so serving them over TLS that depends on that same
-chain is a bootstrap loop. RFC 5280 expects HTTP here.
+Reading the results:
 
-This means it does not contend with the manager on 443 — run a static file
-server on 80 alongside it, serving only the public certificate and CRL files.
-Never expose private keys from that directory.
+- **2 returning anything other than 401** — particularly `200` — means the API is not
+  gated. That is the check that tells you `authBypass: true` is set somewhere, and that
+  your management plane is open to anyone who can reach the port.
+- **3 returning 403 `operator certificate missing access level`** means the handshake
+  worked and the level extension did not. Re-mint with `op-admin.ext` from section 3,
+  including `basicConstraints`, and confirm with
+  `openssl x509 -in operator-admin.crt -text -noout | grep -A2 '59999.1.1'`.
+- **4 returning a status at all** means the listener is trusting a CA you did not
+  intend. Check `operatorCAPath`.
+- The certificate is still *requested* during the handshake, so a browser holding one is
+  still prompted to choose it. Cancelling that prompt now lands on the login page rather
+  than `ERR_BAD_SSL_CLIENT_AUTH_CERT`, which is worth knowing because the old error was
+  indistinguishable from having no certificate installed.
+
+### Container: connect to the published port, not the listener
+
+The image listens on **8443** for HTTPS and **8080** for the redirect, because it runs as
+uid 65532 and cannot bind a privileged port. Publish them as the conventional pair and
+address the published ports in every command above:
+
+```sh
+docker run -p 443:8443 -p 80:8080 \
+  -v /etc/cryptos/fleet:/etc/cryptos/fleet:ro \
+  ghcr.io/cryptos-pki/manager:vX.Y.Z
+```
+
+If you publish HTTPS on anything other than 443, set `httpsPublicPort` to the published
+port as well. The redirect names the port clients reach, not the one the process bound,
+so without it browsers get sent to a port nothing is listening on.
+
+## 8. CRLs and OCSP come from the PKI nodes, not from here
+
+Revocation material must be served over **`http://`, not `https://`**. A CDP or AIA URL
+is fetched by a client in the middle of *building* the trust path, so serving it over TLS
+that depends on that same chain is a bootstrap loop. RFC 5280 expects plain HTTP.
+
+**The CryptOS nodes already do this, and the Fleet Manager plays no part in it.** Each
+node serves `/crl` and `/ocsp` from its own anonymous plaintext listener on
+`pki.revocation_http_port`, which defaults to **80** on the node. A relying party checking
+a certificate talks to the node that issued it. Point `pki.revocation_base_url` at that
+node and the CDP lands in the certificates it issues.
+
+So do **not** run a static file server on port 80 of the manager host. Nothing needs to be
+there, and since the redirect listener binds that port, the two would contend for it. If
+you have a reason to serve files from the manager host's port 80 instead of the redirect,
+leave `httpRedirectListen` unset and the manager will not bind it.
+
+Two things this does not cover:
+
+- **Trust rollout.** Getting the root and intermediate certificates into machine stores is
+  an out-of-band job (Puppet, AD GPO, an image build). It is not an HTTP fetch and does
+  not need a distribution point.
+- **AIA (`caIssuers`).** CryptOS serves no `caIssuers` endpoint on any tier — the nodes
+  expose `/crl` and `/ocsp` only. If you need an AIA URL, it needs its own static host,
+  and that host should not be the manager's port 80 either.
 
 ## Related
 

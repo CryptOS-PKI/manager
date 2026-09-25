@@ -187,7 +187,7 @@ func TestRootHandler_SPAIsAnonymousAndAPIIsNot(t *testing.T) {
 		wantBody string
 	}{
 		{"spa root", "/", http.StatusOK, "spa"},
-		{"spa deep link", "/nodes/ibinfpki00001", http.StatusOK, "spa"},
+		{"spa deep link", "/nodes/pki-root-01", http.StatusOK, "spa"},
 		{"api", "/cryptos.fleet.v1.FleetService/WhoAmI", http.StatusUnauthorized, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
